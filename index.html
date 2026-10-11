@@ -45,6 +45,8 @@
     <span class="pill"><span class="led" id="liveLed"></span><span id="liveText">Telemetri kapalı</span></span>
     <div class="err-banner" id="errBanner"></div>
     <div class="spacer"></div>
+    <button class="btn sync" id="btnSync" data-state="off" title="Ortak kayıt (GitHub)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 18h10a4 4 0 00.6-7.95A6 6 0 006.2 9.1 4.5 4.5 0 007 18z"/></svg><span class="lbl">Ortak kapalı</span></button>
     <button class="btn" id="btnExport" title="Tüm ayarları JSON olarak indir">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v3h16v-3"/></svg>JSON Yedekle</button>
     <button class="btn" id="btnImport" title="JSON yedeğinden geri yükle">
@@ -242,7 +244,7 @@
     <span id="stCalc">Hazır</span>
     <span id="stSave"></span>
     <span class="sep"></span>
-    <span>Tüm ayarlar tarayıcıda (localStorage) saklanır</span>
+    <span>Ayarlar tarayıcıda saklanır · ☁ Ortak kayıt ile GitHub üzerinden paylaşılır</span>
     <span>v1.0</span>
   </footer>
 </div>
@@ -257,6 +259,8 @@
 <script src="js/draw.js"></script>
 <script src="js/chart.js"></script>
 <script src="js/report.js"></script>
+<script src="js/sync-config.js"></script>
+<script src="js/sync.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
