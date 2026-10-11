@@ -337,6 +337,7 @@ table.grid td.n { text-align: right; font-family: "JetBrains Mono", Consolas, mo
 .modal-bg { position: fixed; inset: 0; background: rgba(2, 6, 12, .62); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .modal { width: 620px; max-width: calc(100vw - 32px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border-hi); border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
 .modal.wide { width: 940px; }
+.modal.wide:has(table.vm) { width: 1280px; }
 .modal-h { padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 700; font-size: 16px; color: var(--text-strong); display: flex; align-items: center; gap: 8px; }
 .modal-h .x { margin-left: auto; }
 .modal-b { padding: 12px 14px; overflow: auto; min-height: 0; }
@@ -378,6 +379,28 @@ table.grid td.n { text-align: right; font-family: "JetBrains Mono", Consolas, mo
 .sensor .sg { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 6px; }
 .viewseg { width: auto; flex: none; }
 .viewseg button { padding: 7px 14px; font-weight: 600; }
+
+.sensor .sg3 { display: grid; grid-template-columns: 1fr 1fr 1.1fr; gap: 6px; margin-top: 6px; }
+.sensor .fl { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sensor .fl > span:first-child { font-size: 11.5px; color: var(--muted); }
+.sensor .ma { display: flex; gap: 4px; }
+.sensor .ma select { flex: 1; min-width: 0; padding: 0 4px; }
+.sensor .ma input { width: 54px; flex: none; }
+.sensor .sv { font: 12px/1.4 "JetBrains Mono", Consolas, monospace; color: var(--muted); margin-top: 5px; min-height: 0; }
+.sensor .sv b { color: var(--text-strong); }
+.sensor .sv .badv, .badv { color: var(--bad); font-weight: 700; }
+.fluid-chart { position: relative; height: 230px; margin: 6px 0; }
+.vbar { display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); }
+.vbar .vlbl { font-size: 12px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .6px; }
+.vbar select { width: 210px; height: 30px; font-weight: 600; }
+.vm-wrap { overflow: auto; max-height: 60vh; }
+table.vm td { vertical-align: middle; }
+table.vm td input { height: 30px; }
+table.vm td.s { font-size: 12px; color: var(--muted); white-space: nowrap; }
+table.vm td.acts { white-space: nowrap; }
+table.vm td.acts .btn { margin-left: 3px; }
+table.vm tr.act td { background: var(--accent-soft); }
+#stVenturi { color: var(--accent); }
 
 /* ---------- Kalibrasyon ekranı ---------- */
 .calib { display: grid; grid-template-columns: 660px minmax(0, 1fr); gap: 12px; padding: 12px; align-items: start; }
@@ -447,6 +470,8 @@ table.kv td.n { text-align: right; }
   .topbar { flex-wrap: wrap; height: auto; padding: 8px 14px; position: static; }
   .app { grid-template-rows: auto 1fr 32px; }
   .topbar .pill, .topbar .spacer, .brand small { display: none; }
+  .vbar { width: 100%; }
+  .vbar select { flex: 1; width: auto; }
 }
 @media (max-width: 640px) {
   .main, .calib { padding: 8px 16px; }

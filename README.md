@@ -4,6 +4,7 @@
 
 - **Sıfır kurulum:** Build/derleme yok. Saf HTML5 + Vanilla JS + CSS. Doğrudan tarayıcıda veya GitHub Pages'te çalışır.
 - **Okunaklı SCADA/HMI arayüzü:** 1920×1080 için düzenlenmiştir; büyük yazı ve göstergeler, gerektiğinde dikey kaydırma, sabit (sticky) giriş paneli. Gece/Gündüz modu vardır, varsayılan Gece modudur.
+- **Çoklu venturi:** Her venturinin tasarımı, sensörleri, ölçümleri ve kalibrasyonu ayrı saklanır; kopyalanıp yeni venturide değiştirilebilir.
 - **Kalıcılık:** Ayarlar `localStorage`'da saklanır, JSON ile dışa/içe aktarılabilir ve [Ortak Kayıt](#ortak-kayıt-github-ile-tüm-bilgisayarlarda-aynı-veri) ile GitHub üzerinden tüm bilgisayarlarda otomatik eşitlenir.
 
 ---
@@ -13,14 +14,15 @@
 1. [Hızlı Başlangıç](#hızlı-başlangıç)
 2. [Modüller](#modüller)
 3. [Matematiksel Model](#matematiksel-model)
-4. [Kalibrasyon & PLC (TwinCAT 3)](#kalibrasyon--plc-twincat-3)
-5. [GitHub Pages ile Yayınlama](#github-pages-ile-yayınlama)
-6. [Ortak Kayıt (GitHub ile Tüm Bilgisayarlarda Aynı Veri)](#ortak-kayıt-github-ile-tüm-bilgisayarlarda-aynı-veri)
-7. [InfluxDB v1 Kurulumu ve Bağlantı](#influxdb-v1-kurulumu-ve-bağlantı)
-8. [HTTPS / Mixed Content Sorunu](#https--mixed-content-sorunu)
-9. [CSV Formatları](#csv-formatları)
-10. [Dosya Yapısı](#dosya-yapısı)
-11. [Varsayımlar ve Sınırlamalar](#varsayımlar-ve-sınırlamalar)
+4. [Çoklu Venturi](#çoklu-venturi)
+5. [Kalibrasyon & PLC (TwinCAT 3)](#kalibrasyon--plc-twincat-3)
+6. [GitHub Pages ile Yayınlama](#github-pages-ile-yayınlama)
+7. [Ortak Kayıt (GitHub ile Tüm Bilgisayarlarda Aynı Veri)](#ortak-kayıt-github-ile-tüm-bilgisayarlarda-aynı-veri)
+8. [InfluxDB v1 Kurulumu ve Bağlantı](#influxdb-v1-kurulumu-ve-bağlantı)
+9. [HTTPS / Mixed Content Sorunu](#https--mixed-content-sorunu)
+10. [CSV Formatları](#csv-formatları)
+11. [Dosya Yapısı](#dosya-yapısı)
+12. [Varsayımlar ve Sınırlamalar](#varsayımlar-ve-sınırlamalar)
 
 ---
 
@@ -86,6 +88,7 @@ Hesaplanan büyüklükler:
 - **Sıvı / Gaz seçimi:** Gaz seçildiğinde izentropik üs κ, molar kütle M ve sıkıştırılabilirlik Z alanları açılır. M girilirse yoğunluk ρ = p₁M/(ZRT) ile hesaplanır.
 - **Viskozite zorunludur:** Girilmezse hesap durur ve üst çubukta hata gösterilir.
 - **Hazır kütüphane:** Su (0–100 °C özellik tablosu), Hava, Doğal Gaz, Azot, Su–Glikol %30, Dizel. Kullanıcı yeni akışkan ekleyebilir, kopyalayabilir veya silebilir.
+- **Sıcaklığa bağlı özellik grafiği:** ρ, μ, ν veya pᵥ'nin sıcaklıkla değişimi; tablo noktaları ve işletme sıcaklığı işaretli.
 - **Akıllı CSV içe aktarma:**
   - Ayırıcı (`;`, `,`, TAB, `|`) ve ondalık biçimi (`12,5` / `12.5`) otomatik algılanır.
   - Sütunlar başlık adlarından tahmin edilir. Birimler de başlıklardan tahmin edilir (`(°C)`, `[mbar]`, `m3/h` gibi).
@@ -107,12 +110,28 @@ Hesaplanan büyüklükler:
 
 ### MODÜL 5 — InfluxDB v1 Entegrasyonu & Telemetri
 
-- InfluxDB 1.x HTTP API'sine (`/ping`, `/query`) InfluxQL ile bağlanılır. Ayarlar: URL, veritabanı, kullanıcı/parola (opsiyonel), measurement.
-- **Sensörler:** ΔP (zorunlu), **debi — Coriolis** (kg/h varsayılan), **sıcaklık** ve **yoğunluk — Coriolis** (opsiyonel). Her biri için field, tag anahtarı/değeri ve birim seçilir. Sıcaklık geldiğinde ρ(T) ve μ(T) canlı hesaplanır; yoğunluk sensörü varsa ölçülen ρ kullanılır.
-- **Hareketli ortalama:** Kapalı (ham), son 3 / 5 / 6 / 10 / 12 / 20 / 30 veri, özel pencere veya kümülatif (tümü). "Yalnız yeni zaman damgalı veri" seçeneğiyle, sorgulama hızı veri hızından yüksekse aynı değer tekrar sayılmaz. Ham ve ortalama değerler yan yana gösterilir.
-- **＋ Kalibrasyona ekle:** Anlık ortalama ΔP, Coriolis debi, T ve ρ değerlerini tek tıkla kalibrasyon tablosuna test noktası olarak ekler.
-- **Yenileme sıklığı:** 1, 2, 5, 10, 30 veya 60 saniye. Tek HTTP isteğinde birden çok ifade gönderilir.
-- **Canlı kırmızı nokta:** Okunan ΔP'den debi hesaplanır. Nokta grafikte parlayan, nabız atan kırmızı bir işaret olarak görünür ve son 40 okuma iz olarak kalır.
+- InfluxDB 1.x HTTP API'sine (`/ping`, `/query`) InfluxQL ile bağlanılır. Varsayılanlar: `http://10.10.2.6:8086`, db `lc_100`, measurement `telemetry`. Bağlantı ayarları tüm venturiler için ortaktır.
+- **Sensör adı:** Her sensör için sadece adı yazılır (ör. `P1`). Varsayılan olarak ad, **field adı** kabul edilir:
+
+  ```sql
+  SELECT last("P1") FROM "telemetry" WHERE time > now() - 300s
+  ```
+
+  Ad bir tag değeriyse "Sensör adı nerede? → Tag değeri" seçilir; tag anahtarı ve değer field'ı girilir.
+- **Sorgu penceresi (dk):** Son X dakikada veri yoksa sensör "veri yok" olarak işaretlenir, eski değer canlıymış gibi gösterilmez. 30 sn'den eski veride durum ışığı kırmızıya döner.
+- **Yenileme periyodu:** Milisaniye cinsinden, en az 250 ms.
+- **ΔP kaynağı (venturiye özel):**
+  - **Doğrudan:** ΔP transmitteri.
+  - **P1 − P2:** Giriş ve boğaz basınçlarının farkı.
+
+  P1/P2 için gösterge (bar g) veya mutlak basınç seçilir. P1 girilirse canlı p₁ (mutlak) teorik hesapta ve kavitasyon payında (p₂ − pᵥ) kullanılır.
+- **Sensörler (venturiye özel):** ΔP, P1, P2, debi (Coriolis), sıcaklık, yoğunluk (Coriolis). Her biri için:
+  - ad ve birim,
+  - **a·x + b düzeltmesi** (ham değer önce bu düzeltmeden geçer),
+  - **kendi hareketli ortalaması** (ham, 3/5/6/10/12/20/30, özel, tümü).
+
+  Her sensör kartının altında ham, düzeltilmiş ve ortalama değer ile tampon doluluğu gösterilir.
+- **＋ Kalibrasyona ekle:** Anlık ortalama ΔP, Coriolis debi, T ve ρ değerlerini tek tıkla kalibrasyon tablosuna ekler.
 - **Doğrulama:** Coriolis debisi ile hesaplanan debi arasındaki sapma gösterilir ve belirsizlik sınırına göre ✓/✗ değerlendirilir. Kalibrasyon aktifse hesap kalibre modelle yapılır ve sınır kalibre belirsizliktir.
 - **HTTPS Mixed Content:** Bu durum otomatik algılanır. Hem bir uyarı hem de adım adım bir izin rehberi (popup) gösterilir.
 - **Demo modu:** InfluxDB olmadan sentetik veriyle canlı ekran test edilebilir.
@@ -203,6 +222,30 @@ Bileşenler şöyle belirlenir:
 ### Düz boru mesafeleri
 
 Memba mesafeleri ISO 5167-4 Tablo 1 esas alınarak β = 0,30 … 0,75 aralığında doğrusal interpolasyonla bulunur. Mansap için boğaz prizinden itibaren ≥ 4d alınır.
+
+---
+
+## Çoklu Venturi
+
+Üst çubuktaki **VENTURİ** seçicisi aktif venturiyi gösterir:
+
+| Düğme | İşlev |
+|---|---|
+| Seçici | Venturiler arasında geçiş. Mevcut venturi otomatik kaydedilir, seçilen yüklenir. |
+| **＋** | Varsayılan değerlerle yeni venturi. |
+| **⧉** | Açık venturinin kopyası. Kopya açılır, üzerinde değişiklik yapılabilir; asıl venturi etkilenmez. |
+| **☰ Venturiler** | Tüm liste: ad ve not/konum düzenleme, geometri/akışkan/ΔP sensörü/kalibrasyon özeti, aç, kopyala, tek venturiyi JSON olarak indir (⤓), sil, venturi dosyası içe aktar. |
+
+**Her venturiye özel olanlar:** Standart ve imalat tipi, geometri ve işletme girdileri, akışkan seçimi, What-If noktası, ölçüm (CSV) verisi, kalibrasyon test noktaları ve model ayarları, sensör adları/birimleri/a·x+b düzeltmeleri/ortalamaları, ΔP kaynağı.
+
+**Tüm venturiler için ortak olanlar:** Akışkan kütüphanesi, gösterim birimleri, InfluxDB bağlantısı, tema.
+
+**Kayıt ve paylaşım:**
+- **Tek venturi dosyası** (⤓): Kullandığı akışkan tanımını da içerir. Başka bir bilgisayarda "☰ Venturiler → Venturi dosyası içe aktar" veya üst çubuktaki **JSON Yükle** ile yeni venturi olarak eklenir.
+- **JSON Yedekle:** Girilen **her değeri** içerir: tüm venturiler, akışkanlar, birimler, InfluxDB ayarları, dönüştürücü ve grafik seçimleri.
+- **Ortak kayıt (GitHub):** Tüm venturiler paylaşılır. Hangi venturinin açık olduğu her bilgisayarda yereldir. Bir bilgisayar ortak kayda ilk kez bağlandığında, o bilgisayarda düzenlenmiş venturiler ortak listeye eklenir, kaybolmaz.
+
+Eski sürümden gelen kayıtlar otomatik olarak "Venturi 1" adlı tek bir venturiye taşınır.
 
 ---
 
@@ -345,45 +388,50 @@ influx -execute "GRANT READ ON db TO scada"
 
 Kimlik doğrulamayı açmak için `/etc/influxdb/influxdb.conf` dosyasında `[http]` bölümüne `auth-enabled = true` yazın.
 
-### 3. Veri şeması (önerilen)
+### 3. Veri şeması
 
-Measurement `venturi`, tag `sensor`, field `value`:
+Varsayılan yapı: measurement `telemetry`, **her sensör bir field**:
 
 ```text
-venturi,sensor=DPT-101 value=189.7     # ΔP (ör. mbar)
-venturi,sensor=FT-101  value=70.1      # Debi (ör. m³/h) — opsiyonel, doğrulama için
+telemetry P1=2.31,P2=1.52,T1=24.8,Q1=71250   # P1/P2 bar g, T °C, Q kg/h
+```
+
+Sensör adı tag olarak tutuluyorsa ("Sensör adı nerede? → Tag değeri"):
+
+```text
+telemetry,name=P1 value=2.31
 ```
 
 Test verisi yazma:
 
 ```bash
-curl -i -XPOST 'http://10.10.2.6:8086/write?db=db' --data-binary 'venturi,sensor=DPT-101 value=189.7'
-curl -i -XPOST 'http://10.10.2.6:8086/write?db=db' --data-binary 'venturi,sensor=FT-101 value=70.1'
+curl -i -XPOST 'http://10.10.2.6:8086/write?db=lc_100' --data-binary 'telemetry P1=2.31,P2=1.52,T1=24.8,Q1=71250'
 ```
 
 ### 4. Uygulamanın gönderdiği sorgu
 
 ```sql
-SELECT last("value") FROM "venturi" WHERE "sensor" = 'DPT-101';
-SELECT last("value") FROM "venturi" WHERE "sensor" = 'FT-101'
+SELECT last("P1") FROM "telemetry" WHERE time > now() - 300s;
+SELECT last("P2") FROM "telemetry" WHERE time > now() - 300s
 ```
 
-İstek: `GET {URL}/query?db=db&q=...&epoch=ms[&u=..&p=..]`
+İstek: `GET {URL}/query?db=lc_100&q=...&epoch=ms[&u=..&p=..]`
 
 ### 5. Uygulama ayarları (Canlı sekmesi)
 
 | Alan | Örnek |
 |---|---|
 | URL | `http://10.10.2.6:8086` |
-| Veritabanı | `db` |
-| Measurement | `venturi` |
-| ΔP sensörü: field / tag / birim | `value` / `sensor = DPT-101` / `mbar` |
-| Debi sensörü (ops.): field / tag / birim | `value` / `sensor = FT-101` / `m³/h` |
-| Yenileme sıklığı | 1 sn … 60 sn |
+| Veritabanı | `lc_100` |
+| Measurement | `telemetry` |
+| Sensör adı nerede? | Field adı |
+| ΔP kaynağı | ΔP sensörü (ör. `DP1`) veya P1 − P2 (`P1`, `P2`) |
+| Debi (Coriolis), sıcaklık, yoğunluk | ör. `Q1` (kg/h), `T1` (°C), `RHO1` (kg/m³) |
+| Yenileme / sorgu penceresi | 250 ms … / 5 dk |
 
 Ayarları girdikten sonra:
 
-1. **Bağlantı Testi** ile `/ping` yanıtını ve son değerleri kontrol edin.
+1. **Bağlantı Testi** ile her sensörün son değerini kontrol edin.
 2. **▶ Başlat** ile canlı izlemeyi başlatın.
 
 ### CORS
@@ -452,6 +500,7 @@ js/chart.js         MODÜL 4/5 — Chart.js eğrisi, sınır çizgileri, canlı 
 js/report.js        MODÜL 6 — html2pdf A4 raporu
 js/calib.js         Kalibrasyon motoru — 6 model, LOO çapraz doğrulama, ρ(T)/μ(T) uydurma, TwinCAT/IEC ST kod üretimi
 js/calibui.js       Kalibrasyon & PLC ekranı (test tablosu, model kıyası, grafikler, kod çıktısı)
+js/venturis.js      Çoklu venturi yönetimi penceresi
 js/app.js           Durum yönetimi, localStorage, arayüz bağlama, telemetri döngüsü, JSON yedek
 js/sync.js          Ortak kayıt — GitHub Contents API eşitleme, PBKDF2 + AES-GCM anahtar çözme, çakışma kontrolü
 js/sync-config.js   Ortak kayıt deposu ve şifreli anahtar
