@@ -178,10 +178,12 @@
   }
 
   /* ---------------- Eşitleme ---------------- */
-  function apply(remote, silent) {
-    app.applyShared(remote.data.state || {});
-    setMeta({ sha: remote.sha, hash: hash(app.getSharedJson()), savedAt: remote.data.savedAt, savedBy: remote.data.savedBy });
-    if (!silent) app.toast(`Ortak sürüm yüklendi — ${remote.data.savedBy || '?'}, ${new Date(remote.data.savedAt).toLocaleString('tr-TR')}`, 'ok');
+  function apply(remote, silent, mergeLocal) {
+    const added = app.applyShared(remote.data.state || {}, !!mergeLocal) || 0;
+    // Yerel venturiler eklendiyse içerik ortak dosyadan farklıdır → bir sonraki adımda yazılır
+    setMeta({ sha: remote.sha, hash: added ? 'merged' : hash(app.getSharedJson()), savedAt: remote.data.savedAt, savedBy: remote.data.savedBy });
+    if (!silent) app.toast(`Ortak sürüm yüklendi — ${remote.data.savedBy || '?'}, ${new Date(remote.data.savedAt).toLocaleString('tr-TR')}` + (added ? ` · bu bilgisayardaki ${added} venturi ortak listeye eklendi` : ''), 'ok');
+    if (added && canWrite()) schedulePush(1500);
   }
 
   function pull() {
@@ -201,7 +203,7 @@
         return idleStatus();
       }
       const remoteHash = hash(JSON.stringify(remote.data.state || {}));
-      if (!m.sha && !m.hash) return apply(remote, false), idleStatus(); // bu bilgisayarda ilk eşitleme
+      if (!m.sha && !m.hash) return apply(remote, false, true), idleStatus(); // bu bilgisayarda ilk eşitleme: yerel venturiler korunur
       if (remoteHash === hash(app.getSharedJson()) || !dirty()) {
         apply(remote, remoteHash === hash(app.getSharedJson()));
         return idleStatus();

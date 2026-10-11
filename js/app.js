@@ -36,6 +36,28 @@
 
   const DISP_DIMS = ['flow', 'pressure', 'length', 'temperature', 'density', 'viscosity'];
 
+  function sensor(name, unit, enabled) {
+    return { enabled: !!enabled, name, unit, a: 1, b: 0, avg: { mode: 'n', n: 5 } };
+  }
+  function defaultSensors() {
+    return {
+      dpMode: 'direct',   // 'direct' = ΔP transmitteri, 'diff' = P1 − P2
+      pGauge: true,       // P1/P2 gösterge (gauge) basıncı mı?
+      list: {
+        dp: sensor('DP1', 'mbar', true),
+        p1: sensor('P1', 'bar', false),
+        p2: sensor('P2', 'bar', false),
+        q: sensor('Q1', 'kg/h', false),
+        T: sensor('T1', 'C', false),
+        rho: sensor('RHO1', 'kg/m3', false)
+      }
+    };
+  }
+
+  // Her venturiye özel alanlar (geri kalanı ortak)
+  const VKEYS = ['method', 'mfg', 'fitting', 'inputs', 'activeFluid', 'measured', 'whatIf', 'calib', 'sensors'];
+  const clone = o => JSON.parse(JSON.stringify(o));
+
   function defaults() {
     const inputs = {};
     for (const k in INPUTS) inputs[k] = { ...INPUTS[k].def };
@@ -53,15 +75,20 @@
       activeFluid: 'water',
       measured: [],
       whatIf: 70,
+      // InfluxDB bağlantısı — tüm venturiler için ortak
       influx: {
-        url: 'http://10.10.2.6:8086', db: 'db', user: '', pass: '', measurement: 'venturi', rate: 5,
-        dp: { enabled: true, field: 'value', tagKey: 'sensor', tagValue: 'DPT-101', unit: 'mbar' },
-        q: { enabled: false, field: 'value', tagKey: 'sensor', tagValue: 'FT-101', unit: 'kg/h' },
-        T: { enabled: false, field: 'value', tagKey: 'sensor', tagValue: 'TT-101', unit: 'C' },
-        rho: { enabled: false, field: 'value', tagKey: 'sensor', tagValue: 'DT-101', unit: 'kg/m3' },
-        avg: { mode: 'n', n: 5, newOnly: true }
+        url: 'http://10.10.2.6:8086', db: 'lc_100', user: '', pass: '', measurement: 'telemetry',
+        rateMs: 1000, windowMin: 5,
+        nameMode: 'field', tagKey: 'name', valueField: 'value',
+        newOnly: true
       },
+      // Sensörler — her venturiye özel (ad, birim, ax+b kalibrasyonu, hareketli ortalama)
+      sensors: defaultSensors(),
       view: 'main',
+      conv: { dim: 'flow', v: 1, from: 'm3/h' },
+      fluidChart: { prop: 'rho' },
+      venturis: [],
+      activeVenturi: null,
       calib: {
         rows: [],
         units: { q: 'kg/h', dp: 'mbar', T: 'C', rho: 'kg/m3' },
@@ -86,18 +113,64 @@
     return over === undefined || over === null ? base : over;
   }
 
+  /** Eski sürüm kayıtlarını yeni yapıya taşır ve venturi listesini garanti eder */
+  function migrate(s, raw) {
+    raw = raw || {};
+    const ix = raw.influx || {};
+    if (ix.rate && !ix.rateMs) s.influx.rateMs = ix.rate * 1000;
+    if (ix.db === 'db') s.influx.db = 'lc_100';
+    if (ix.measurement === 'venturi') s.influx.measurement = 'telemetry';
+    ['dp', 'q', 'T', 'rho', 'avg', 'rate'].forEach(k => delete s.influx[k]);
+    // v1.3 sensör tanımları (field/tag) → yeni sensör listesi
+    ['dp', 'q', 'T', 'rho'].forEach(k => {
+      const o = ix[k];
+      if (o && !raw.sensors) {
+        const t = s.sensors.list[k];
+        t.enabled = k === 'dp' ? true : !!o.enabled;
+        if (o.unit) t.unit = o.unit;
+        if (o.field && o.field !== 'value') t.name = o.field;
+      }
+    });
+    if (ix.avg && !raw.sensors) Object.values(s.sensors.list).forEach(t => { t.avg = { mode: ix.avg.mode, n: ix.avg.n }; });
+    if (!s.fluids.length) s.fluids = clone(F.BUILTIN);
+    if (!Array.isArray(s.venturis) || !s.venturis.length) {
+      const id = 'v' + Date.now().toString(36);
+      s.venturis = [{ id, name: 'Venturi 1', note: '', created: new Date().toISOString(), updated: new Date().toISOString(), data: pickV(s) }];
+      s.activeVenturi = id;
+    }
+    if (!s.venturis.find(v => v.id === s.activeVenturi)) s.activeVenturi = s.venturis[0].id;
+    loadVData(s, s.venturis.find(v => v.id === s.activeVenturi).data);
+    return s;
+  }
+
+  const pickV = s => { const o = {}; VKEYS.forEach(k => { o[k] = clone(s[k]); }); return o; };
+  /** Venturi kaydındaki veriyi çalışma alanına yükler (eksikler varsayılandan) */
+  function loadVData(s, data) {
+    const d = defaults();
+    VKEYS.forEach(k => { s[k] = merge(d[k], data ? clone(data[k]) : undefined); });
+    if (!s.fluids.find(f => f.id === s.activeFluid)) s.activeFluid = s.fluids[0].id;
+  }
+
   let state = defaults();
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) state = merge(defaults(), JSON.parse(raw));
-  } catch (e) { console.warn('Kayıtlı durum okunamadı', e); }
-  if (!state.fluids.length) state.fluids = JSON.parse(JSON.stringify(F.BUILTIN));
-  if (!state.fluids.find(f => f.id === state.activeFluid)) state.activeFluid = state.fluids[0].id;
+    const parsed = raw ? JSON.parse(raw) : null;
+    state = migrate(merge(defaults(), parsed || {}), parsed);
+  } catch (e) { console.warn('Kayıtlı durum okunamadı', e); state = migrate(defaults()); }
+
+  /** Çalışma alanını aktif venturi kaydına yazar */
+  function snapshotVenturi() {
+    const rec = state.venturis.find(v => v.id === state.activeVenturi);
+    if (!rec) return;
+    const data = pickV(state);
+    if (JSON.stringify(data) !== JSON.stringify(rec.data)) { rec.data = data; rec.updated = new Date().toISOString(); }
+  }
 
   let saveTimer = null;
   function save() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
+      snapshotVenturi();
       try {
         localStorage.setItem(STORE_KEY, JSON.stringify(state));
         $('stSave').textContent = '● Kaydedildi ' + new Date().toLocaleTimeString('tr-TR');
@@ -109,23 +182,41 @@
   }
 
   /* ---------- Ortak kayıt (GitHub) için paylaşılan durum ----------
-   * Tema, açık sekme ve InfluxDB parolası her bilgisayarda yerel kalır. */
-  const LOCAL_ONLY = s => ({ theme: s.theme, tab: s.tab, view: s.view, pass: s.influx.pass });
+   * Tema, açık sekme ve InfluxDB parolası her bilgisayarda yerel kalır.
+   * Aktif venturi seçimi de yereldir: her bilgisayar farklı venturiye bakabilir.
+   * Venturiye özel alanlar ortak dosyada yalnızca venturi kayıtlarının içinde bulunur. */
+  const LOCAL_KEYS = ['theme', 'tab', 'view', 'activeVenturi', 'conv', 'fluidChart'];
 
   function getSharedJson() {
-    const s = JSON.parse(JSON.stringify(state));
-    delete s.theme; delete s.tab; delete s.view;
+    snapshotVenturi();
+    const s = clone(state);
+    LOCAL_KEYS.concat(VKEYS).forEach(k => delete s[k]);
     s.influx.pass = '';
     return JSON.stringify(s);
   }
 
-  function applyShared(remote) {
-    const keep = LOCAL_ONLY(state);
-    state = merge(defaults(), remote);
-    state.theme = keep.theme; state.tab = keep.tab; state.view = keep.view; state.influx.pass = keep.pass;
-    if (!state.fluids.length) state.fluids = JSON.parse(JSON.stringify(F.BUILTIN));
-    if (!state.fluids.find(f => f.id === state.activeFluid)) state.activeFluid = state.fluids[0].id;
+  /** Ortak kaydı uygular. mergeLocal: bu bilgisayarın düzenlenmiş (varsayılan olmayan)
+   *  venturileri ortak listede yoksa eklenir; eklenen sayısı döner. */
+  function applyShared(remote, mergeLocal) {
+    snapshotVenturi();
+    const blank = JSON.stringify(pickV(defaults()));
+    const localV = mergeLocal ? clone(state.venturis.filter(v => JSON.stringify(v.data) !== blank)) : [];
+    const keep = {};
+    LOCAL_KEYS.forEach(k => { keep[k] = state[k]; });
+    const pass = state.influx.pass;
+    const s = merge(defaults(), remote);
+    LOCAL_KEYS.forEach(k => { if (keep[k] !== undefined) s[k] = keep[k]; });
+    s.influx.pass = pass;
+    stopLive(true);
+    state = migrate(s, remote);
+    let added = 0;
+    localV.forEach(v => {
+      if (state.venturis.some(x => x.id === v.id)) return;
+      v.name = uniqueName(v.name);
+      state.venturis.push(v); added++;
+    });
     initUI();
+    return added;
   }
 
   /* ============================================================
@@ -365,7 +456,6 @@
       ti.innerHTML = f.type === 'gas' ? 'Gazlarda M girilirse yoğunluk p₁ ve T\'den ideal gaz denklemiyle (ρ = p₁M/ZRT) hesaplanır.' : 'Sabit özellikler kullanılıyor. Sıcaklığa bağlı tablo için CSV içe aktarın.';
     }
     $('btnFluidDel').disabled = state.fluids.length <= 1;
-    $('pillFluid').textContent = f.name;
   }
 
   function showTable(f) {
@@ -379,12 +469,12 @@
   }
 
   function bindFluidTab() {
+    $('fcProp').addEventListener('change', e => { state.fluidChart.prop = e.target.value; save(); if (lastCalc) renderFluidChart(lastCalc.c); });
     $('selFluid').addEventListener('change', e => { state.activeFluid = e.target.value; buildFluidTab(); recalc(); });
     $('fName').addEventListener('input', e => {
       activeFluid().name = e.target.value || 'Adsız';
       const o = $('selFluid').selectedOptions[0];
       if (o) o.textContent = `${activeFluid().name} (${activeFluid().type === 'gas' ? 'Gaz' : 'Sıvı'})`;
-      $('pillFluid').textContent = activeFluid().name;
       save();
     });
     $('fType').addEventListener('click', e => {
@@ -453,6 +543,57 @@
       : 'Ölçüm verisi yüklenmedi.';
     const l = $('lnkMeasClr');
     if (l) l.onclick = e => { e.preventDefault(); state.measured = []; recalc(); };
+    renderFluidChart(c);
+  }
+
+  /* ---------- Akışkan özelliklerinin sıcaklığa bağlı grafiği ---------- */
+  let fluidChart = null;
+  const FPROPS = {
+    rho: { label: 'Yoğunluk ρ', dim: 'density', get: r => r.rho },
+    mu: { label: 'Dinamik viskozite μ', dim: 'viscosity', get: r => r.mu },
+    nu: { label: 'Kinematik viskozite ν', dim: null, unit: 'cSt', get: r => r.mu / r.rho * 1e6 },
+    pv: { label: 'Buhar basıncı pᵥ', dim: 'pressure', get: r => r.pv, liquid: true }
+  };
+  function renderFluidChart(c) {
+    const cv = $('fluidChart');
+    if (!cv || typeof Chart === 'undefined' || state.tab !== 'fluid') return;
+    const f = activeFluid();
+    let prop = state.fluidChart.prop;
+    if (FPROPS[prop].liquid && f.type !== 'liquid') prop = 'rho';
+    $('fcProp').value = prop;
+    const P0 = FPROPS[prop];
+    const tb = f.table && f.table.length ? f.table : null;
+    const Tlo = tb ? tb[0].T : c.inp.T - 40, Thi = tb ? tb[tb.length - 1].T : c.inp.T + 40;
+    const tu = state.units.temperature;
+    const yu = P0.dim ? state.units[P0.dim] : null;
+    const conv = (r, v) => P0.dim ? U.fromSI(P0.dim, v, yu, { rho: r.rho }) : v;
+    const pts = Array.from({ length: 61 }, (_, i) => {
+      const T = Tlo + (Thi - Tlo) * i / 60;
+      const r = F.resolve(f, T, c.inp.p1);
+      return { x: U.fromSI('temperature', T, tu), y: conv(r, P0.get(r)) };
+    });
+    const tpts = tb ? tb.map(r => ({ x: U.fromSI('temperature', r.T, tu), y: conv({ rho: r.rho, mu: r.mu }, P0.get({ rho: r.rho, mu: r.mu, pv: r.pv })) })).filter(p => isFinite(p.y)) : [];
+    const rNow = F.resolve(f, c.inp.T, c.inp.p1);
+    const now = [{ x: U.fromSI('temperature', c.inp.T, tu), y: conv(rNow, P0.get(rNow)) }];
+    const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    const unitLbl = P0.dim ? U.label(P0.dim, yu) : P0.unit;
+    const ds = [
+      { label: tb ? 'İnterpolasyon' : 'Sabit (tablo yok)', data: pts, showLine: true, borderColor: css('--accent'), borderWidth: 2, pointRadius: 0 },
+      { label: 'Tablo noktaları', data: tpts, backgroundColor: css('--amber'), borderColor: css('--amber'), pointRadius: 3.5 },
+      { label: 'İşletme T', data: now, backgroundColor: '#ff2d2d', borderColor: '#fff', borderWidth: 1.5, pointRadius: 6 }
+    ];
+    const opts = {
+      animation: false, responsive: true, maintainAspectRatio: false, parsing: false,
+      scales: {
+        x: { type: 'linear', title: { display: true, text: `Sıcaklık [${U.label('temperature', tu)}]`, color: css('--chart-text') }, grid: { color: css('--chart-grid') }, ticks: { color: css('--chart-text') } },
+        y: { type: prop === 'pv' ? 'logarithmic' : 'linear', title: { display: true, text: `${P0.label} [${unitLbl}]`, color: css('--chart-text') }, grid: { color: css('--chart-grid') }, ticks: { color: css('--chart-text') } }
+      },
+      plugins: { legend: { labels: { color: css('--chart-text'), boxWidth: 10 } } }
+    };
+    if (prop === 'pv' && !(tpts.length || pts.some(p => p.y > 0))) opts.scales.y.type = 'linear';
+    if (!fluidChart) fluidChart = new Chart(cv, { type: 'scatter', data: { datasets: ds }, options: opts });
+    else { fluidChart.data.datasets = ds; fluidChart.options = opts; fluidChart.update(); }
+    $('fcNote').textContent = tb ? `Tablo aralığı ${U.fmt(U.fromSI('temperature', Tlo, tu), 3)} … ${U.fmt(U.fromSI('temperature', Thi, tu), 3)} ${U.label('temperature', tu)}; dışında uç değer kullanılır.` : 'Bu akışkanın sıcaklık tablosu yok; özellikler sabit kabul edilir. CSV ile tablo yükleyebilirsiniz.';
   }
 
   /* ============================================================
@@ -464,12 +605,17 @@
     $('dispUnits').querySelectorAll('[data-disp]').forEach(el => el.addEventListener('change', () => {
       state.units[el.dataset.disp] = el.value; buildFluidTab(); recalc(); liveRender();
     }));
+    const cv = state.conv;
     $('cvDim').innerHTML = DISP_DIMS.map(d => `<option value="${d}">${U.DIMS[d].label}</option>`).join('');
+    $('cvDim').value = DISP_DIMS.includes(cv.dim) ? cv.dim : 'flow';
     const fillFrom = () => { const d = $('cvDim').value; $('cvFrom').innerHTML = U.units(d).map(u => `<option value="${u}">${U.label(d, u)}</option>`).join(''); };
     fillFrom();
-    $('cvDim').onchange = () => { fillFrom(); convRender(); };
-    $('cvFrom').onchange = convRender;
-    $('cvVal').oninput = convRender;
+    if (U.units($('cvDim').value).includes(cv.from)) $('cvFrom').value = cv.from;
+    $('cvVal').value = cv.v;
+    const store = () => { state.conv = { dim: $('cvDim').value, v: parseFloat($('cvVal').value), from: $('cvFrom').value }; save(); };
+    $('cvDim').onchange = () => { fillFrom(); store(); convRender(); };
+    $('cvFrom').onchange = () => { store(); convRender(); };
+    $('cvVal').oninput = () => { store(); convRender(); };
     convRender();
   }
 
@@ -499,7 +645,6 @@
     renderResolved(c);
     $('rowMfg').style.display = state.method === 'bernoulli' ? 'none' : '';
     $('fieldsBernoulli').style.display = state.method === 'bernoulli' ? '' : 'none';
-    $('pillStd').textContent = P.STANDARDS[state.method].short + (state.method !== 'bernoulli' ? ' · ' + P.TYPES[state.mfg].name.split(' (')[0] : '');
 
     const errs = validate(c);
     $('errBanner').textContent = errs.length ? '⚠ ' + errs.join(' · ') : '';
@@ -692,15 +837,28 @@
   /* ============================================================
    * Canlı telemetri (InfluxDB v1)
    * ============================================================ */
-  const live = { running: false, demo: false, timer: null, point: null, trail: [], mixedShown: false, phase: 0, buf: {}, lastTs: {}, raw: {}, val: {}, time: null };
+  const live = { running: false, demo: false, timer: null, point: null, trail: [], mixedShown: false, phase: 0, buf: {}, lastTs: {}, raw: {}, val: {}, time: null, stale: {} };
+  const PATM = 101325;
 
-  // InfluxDB sensörleri: ΔP zorunlu; debi (Coriolis), sıcaklık ve yoğunluk opsiyonel
+  // InfluxDB sensörleri (venturiye özel). ΔP: doğrudan transmitter veya P1 − P2
   const SENSORS = [
-    { key: 'dp', name: 'Fark basınç ΔP', dim: 'pressure', req: true },
+    { key: 'dp', name: 'Fark basınç ΔP', dim: 'pressure' },
+    { key: 'p1', name: 'Giriş basıncı P1', dim: 'pressure' },
+    { key: 'p2', name: 'Boğaz basıncı P2', dim: 'pressure' },
     { key: 'q', name: 'Debi (Coriolis)', dim: 'flow' },
     { key: 'T', name: 'Sıcaklık', dim: 'temperature' },
     { key: 'rho', name: 'Yoğunluk (Coriolis)', dim: 'density' }
   ];
+  const SL = () => state.sensors.list;
+  /** Sensör kullanılıyor mu? (ΔP moduna göre zorunlu olanlar her zaman açık) */
+  function sensorOn(key) {
+    const m = state.sensors.dpMode;
+    if (key === 'dp') return m === 'direct';
+    if (key === 'p2') return m === 'diff';
+    if (key === 'p1' && m === 'diff') return true;
+    return !!SL()[key].enabled;
+  }
+  const sensorReq = key => (key === 'dp' && state.sensors.dpMode === 'direct') || ((key === 'p1' || key === 'p2') && state.sensors.dpMode === 'diff');
 
   function log(msg, cls) {
     const el = $('ixLog');
@@ -716,75 +874,88 @@
     $('liveText').textContent = text;
   }
 
+  const MA_OPTS = [['off', 'Ham'], ['3', '3'], ['5', '5'], ['6', '6'], ['10', '10'], ['12', '12'], ['20', '20'], ['30', '30'], ['custom', 'Özel'], ['all', 'Tümü']];
+  function maValue(a) { return a.mode === 'n' ? ([3, 5, 6, 10, 12, 20, 30].includes(a.n) ? String(a.n) : 'custom') : a.mode; }
+
   function renderSensors() {
-    const ix = state.influx;
+    const L = SL();
+    $('dpModeSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === state.sensors.dpMode));
+    $('pGaugeSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === !!state.sensors.pGauge));
     $('ixSensors').innerHTML = SENSORS.map(s => {
-      const c = ix[s.key];
-      return `<div class="sensor ${s.req || c.enabled ? '' : 'off'}" data-s="${s.key}">
-        <label class="sh">${s.req ? '<input type="checkbox" checked disabled>' : `<input type="checkbox" data-f="enabled" ${c.enabled ? 'checked' : ''}>`} ${s.name}${s.req ? ' <span class="req">*</span>' : ''}</label>
+      const c = L[s.key], on = sensorOn(s.key), req = sensorReq(s.key);
+      const hidden = (s.key === 'dp' && state.sensors.dpMode === 'diff') || (s.key === 'p2' && state.sensors.dpMode === 'direct');
+      if (hidden) return '';
+      const mv = maValue(c.avg);
+      return `<div class="sensor ${on ? '' : 'off'}" data-s="${s.key}">
+        <label class="sh">${req ? '<input type="checkbox" checked disabled>' : `<input type="checkbox" data-f="enabled" ${c.enabled ? 'checked' : ''}>`} ${s.name}${req ? ' <span class="req">*</span>' : ''}
+          ${s.key === 'p1' && !req ? '<span class="hint">canlı p₁ için</span>' : ''}</label>
         <div class="sg">
-          <input type="text" data-f="field" value="${esc(c.field)}" placeholder="field">
-          <select data-f="unit">${U.units(s.dim).map(u => `<option value="${u}" ${c.unit === u ? 'selected' : ''}>${U.label(s.dim, u)}</option>`).join('')}</select>
-          <input type="text" data-f="tagKey" value="${esc(c.tagKey)}" placeholder="tag anahtarı">
-          <input type="text" data-f="tagValue" value="${esc(c.tagValue)}" placeholder="tag değeri">
-        </div></div>`;
+          <label class="fl"><span>Sensör adı</span><input type="text" data-f="name" value="${esc(c.name)}" placeholder="ör. P1"></label>
+          <label class="fl"><span>Birim</span><select data-f="unit">${U.units(s.dim).map(u => `<option value="${u}" ${c.unit === u ? 'selected' : ''}>${U.label(s.dim, u)}</option>`).join('')}</select></label>
+        </div>
+        <div class="sg3">
+          <label class="fl"><span>a (çarpan)</span><input type="number" step="any" data-f="a" value="${c.a}"></label>
+          <label class="fl"><span>b (ofset)</span><input type="number" step="any" data-f="b" value="${c.b}"></label>
+          <label class="fl"><span>Ort. (veri)</span><span class="ma"><select data-f="avg">${MA_OPTS.map(([v, t]) => `<option value="${v}" ${mv === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+            <input type="number" data-f="avgn" min="1" step="1" value="${c.avg.n}" style="${mv === 'custom' ? '' : 'display:none'}"></span></label>
+        </div>
+        <div class="sv" data-sv="${s.key}"></div></div>`;
     }).join('');
   }
 
   function bindLiveTab() {
+    const ix = () => state.influx;
     const bind = (id, get, set) => { const el = $(id); get(el); el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', () => { set(el); save(); checkMixed(); }); };
-    bind('ixUrl', e => e.value = state.influx.url, e => state.influx.url = e.value.trim());
-    bind('ixDb', e => e.value = state.influx.db, e => state.influx.db = e.value.trim());
-    bind('ixUser', e => e.value = state.influx.user, e => state.influx.user = e.value);
-    bind('ixPass', e => e.value = state.influx.pass, e => state.influx.pass = e.value);
-    bind('ixMeas', e => e.value = state.influx.measurement, e => state.influx.measurement = e.value.trim());
-    bind('ixRate', e => e.value = String(state.influx.rate), e => { state.influx.rate = Number(e.value); if (live.running) { clearTimeout(live.timer); schedule(0); } });
+    bind('ixUrl', e => e.value = ix().url, e => ix().url = e.value.trim());
+    bind('ixDb', e => e.value = ix().db, e => ix().db = e.value.trim());
+    bind('ixUser', e => e.value = ix().user, e => ix().user = e.value);
+    bind('ixPass', e => e.value = ix().pass, e => ix().pass = e.value);
+    bind('ixMeas', e => e.value = ix().measurement, e => ix().measurement = e.value.trim());
+    bind('ixNameMode', e => e.value = ix().nameMode, e => { ix().nameMode = e.value; $('ixTagOpts').hidden = e.value !== 'tag'; });
+    bind('ixTagKey', e => e.value = ix().tagKey, e => ix().tagKey = e.value.trim());
+    bind('ixValueField', e => e.value = ix().valueField, e => ix().valueField = e.value.trim());
+    bind('ixRateMs', e => e.value = ix().rateMs, e => { const v = Number(e.value); if (v >= 250) { ix().rateMs = v; e.classList.remove('invalid'); if (live.running) { clearTimeout(live.timer); schedule(0); } } else e.classList.add('invalid'); });
+    bind('ixWindow', e => e.value = ix().windowMin, e => { const v = Number(e.value); if (v >= 0) ix().windowMin = v; });
+    bind('maNewOnly', e => e.checked = !!ix().newOnly, e => ix().newOnly = e.checked);
+    $('ixTagOpts').hidden = ix().nameMode !== 'tag';
     renderSensors();
+    $('dpModeSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.sensors.dpMode = b.dataset.v; resetAvg(); renderSensors(); save(); liveRecompute(false); });
+    $('pGaugeSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.sensors.pGauge = b.dataset.v === '1'; renderSensors(); save(); liveRecompute(false); });
     const onSensor = e => {
       const box = e.target.closest('[data-s]'); const f = e.target.dataset.f;
       if (!box || !f) return;
-      const c = state.influx[box.dataset.s];
-      c[f] = e.target.type === 'checkbox' ? e.target.checked : e.target.value.trim();
-      if (f === 'enabled') box.classList.toggle('off', !e.target.checked);
-      if (f === 'unit' || f === 'enabled') resetAvg();
-      save(); liveRender();
+      const key = box.dataset.s, c = SL()[key];
+      if (f === 'enabled') { c.enabled = e.target.checked; box.classList.toggle('off', !e.target.checked); resetAvg(key); }
+      else if (f === 'name') c.name = e.target.value.trim();
+      else if (f === 'unit') { c.unit = e.target.value; resetAvg(key); }
+      else if (f === 'a' || f === 'b') { const v = parseFloat(e.target.value); if (!isFinite(v)) return e.target.classList.add('invalid'); e.target.classList.remove('invalid'); c[f] = v; resetAvg(key); }
+      else if (f === 'avg') {
+        const v = e.target.value;
+        if (v === 'off' || v === 'all') c.avg.mode = v; else { c.avg.mode = 'n'; if (v !== 'custom') c.avg.n = Number(v); }
+        box.querySelector('[data-f=avgn]').style.display = v === 'custom' ? '' : 'none';
+        trimAvg(key);
+      } else if (f === 'avgn') { const n = Math.round(Number(e.target.value)); if (n >= 1) { c.avg.n = n; trimAvg(key); } }
+      save(); liveRecompute(false);
     };
-    $('ixSensors').addEventListener('input', onSensor);
-    $('ixSensors').addEventListener('change', onSensor);
-    // Hareketli ortalama
-    const fillMa = () => {
-      const a = state.influx.avg;
-      $('maMode').value = a.mode === 'n' ? ([3, 5, 6, 10, 12, 20, 30].includes(a.n) ? String(a.n) : 'custom') : a.mode;
-      $('maN').value = a.n;
-      $('maN').style.display = $('maMode').value === 'custom' ? '' : 'none';
-      $('maNewOnly').checked = !!a.newOnly;
-    };
-    fillMa();
-    $('maMode').addEventListener('change', e => {
-      const v = e.target.value, a = state.influx.avg;
-      if (v === 'off' || v === 'all') a.mode = v;
-      else { a.mode = 'n'; if (v !== 'custom') a.n = Number(v); }
-      fillMa(); trimAvg(); save(); liveRecompute(false);
-    });
-    $('maN').addEventListener('input', e => { const n = Math.round(Number(e.target.value)); if (n >= 1) { state.influx.avg.n = n; trimAvg(); save(); liveRecompute(false); } });
-    $('maNewOnly').addEventListener('change', e => { state.influx.avg.newOnly = e.target.checked; save(); });
-    $('maReset').onclick = () => { resetAvg(); liveRecompute(false); UI.toast('Ortalama tamponu sıfırlandı', 'ok'); };
+    $('ixSensors').addEventListener('input', e => { if (e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') onSensor(e); });
+    $('ixSensors').addEventListener('change', e => { if (e.target.tagName === 'SELECT' || e.target.type === 'checkbox') onSensor(e); });
+    $('maReset').onclick = () => { resetAvg(); liveRecompute(false); UI.toast('Ortalama tamponları sıfırlandı', 'ok'); };
     $('btnToCal').onclick = () => {
-      const v = live.val;
+      const v = currentValues();
       if (!live.running || !(v.dp > 0) || !(v.q > 0)) return UI.toast('Kalibrasyon noktası için ΔP ve Coriolis debi sensörlerinden canlı veri gerekli.', 'err');
       VF.CalibUI.addFromLive({ qm: v.q, dp: v.dp, T: v.T, rho: v.rho });
-      UI.toast(`Kalibrasyona eklendi: ${D.flow(v.q, { rho: v.rho || 1000 })} ${D.fu()} · ${D.p(v.dp)} ${D.pu()} (ort. ${avgCount('dp')} veri)`, 'ok');
+      UI.toast(`Kalibrasyona eklendi: ${D.flow(v.q, { rho: v.rho || 1000 })} ${D.fu()} · ${D.p(v.dp)} ${D.pu()}`, 'ok');
     };
     $('lnkGuide').onclick = showMixedGuide;
     $('btnPing').onclick = async () => {
-      log('Bağlantı testi: ' + state.influx.url);
+      log('Bağlantı testi: ' + ix().url + ' · db=' + ix().db);
       try {
-        const ver = await VF.Influx.ping(state.influx);
+        const ver = await VF.Influx.ping(ix());
         log('Ping OK — InfluxDB sürümü ' + ver, 'o');
         if (!/^1\./.test(ver) && ver !== 'bilinmiyor') log('Uyarı: Bu araç InfluxDB v1.x (InfluxQL) için tasarlanmıştır.', 'e');
         const sensors = sensorsList();
-        const data = await VF.Influx.fetchLast(state.influx, sensors);
-        sensors.forEach(s => log(`${s.key}: ${data[s.key] ? data[s.key].value + ' @ ' + new Date(data[s.key].time).toLocaleString('tr-TR') : 'veri yok'}`, data[s.key] ? 'o' : 'e'));
+        const data = await VF.Influx.fetchLast(ix(), sensors);
+        sensors.forEach(s => log(`${SL()[s.key].name}: ${data[s.key] ? data[s.key].value + ' @ ' + new Date(data[s.key].time).toLocaleString('tr-TR') : 'veri yok (son ' + ix().windowMin + ' dk)'}`, data[s.key] ? 'o' : 'e'));
         UI.toast('InfluxDB bağlantısı başarılı', 'ok');
       } catch (e) { handleErr(e); }
     };
@@ -793,33 +964,65 @@
     checkMixed();
   }
 
+  /** Sorgulanacak sensörler → InfluxQL parametreleri */
   function sensorsList() {
     const ix = state.influx;
-    return SENSORS.filter(s => s.req || ix[s.key].enabled).map(s => ({ key: s.key, field: ix[s.key].field, tagKey: ix[s.key].tagKey, tagValue: ix[s.key].tagValue }));
+    return SENSORS.filter(s => sensorOn(s.key) && SL()[s.key].name).map(s => {
+      const name = SL()[s.key].name;
+      return ix.nameMode === 'tag'
+        ? { key: s.key, field: ix.valueField || 'value', tagKey: ix.tagKey, tagValue: name }
+        : { key: s.key, field: name };
+    });
   }
 
-  /* ---------- Hareketli ortalama ---------- */
-  function avgWindow() {
-    const a = state.influx.avg;
+  /* ---------- Sensör başına düzeltme (a·x+b) ve hareketli ortalama ---------- */
+  function avgWindow(key) {
+    const a = SL()[key].avg;
     return a.mode === 'off' ? 1 : a.mode === 'all' ? 100000 : Math.max(1, a.n | 0);
   }
-  function resetAvg() { live.buf = {}; live.lastTs = {}; live.val = {}; live.raw = {}; }
-  function trimAvg() {
-    const n = avgWindow();
-    for (const k in live.buf) { const b = live.buf[k]; if (b.length > n) b.splice(0, b.length - n); live.val[k] = b.length ? b.reduce((s, x) => s + x, 0) / b.length : null; }
+  function resetAvg(key) {
+    const keys = key ? [key] : Object.keys(SL());
+    keys.forEach(k => { delete live.buf[k]; delete live.lastTs[k]; delete live.val[k]; delete live.raw[k]; });
   }
-  /** Yeni ham değeri (SI) tampona ekler ve ortalamayı günceller */
-  function feed(key, v, ts) {
-    live.raw[key] = v;
-    if (v === null || !isFinite(v)) return;
-    const b = live.buf[key] = live.buf[key] || [];
-    if (!(state.influx.avg.newOnly && ts !== undefined && live.lastTs[key] === ts && b.length)) b.push(v);
-    live.lastTs[key] = ts;
-    const n = avgWindow();
+  function trimAvg(key) {
+    const b = live.buf[key];
+    if (!b) return;
+    const n = avgWindow(key);
     if (b.length > n) b.splice(0, b.length - n);
-    live.val[key] = b.reduce((s, x) => s + x, 0) / b.length;
+    live.val[key] = b.length ? b.reduce((s, x) => s + x, 0) / b.length : undefined;
+  }
+  /** Ham sensör değeri (sensör biriminde) → a·x+b → SI → ortalama tamponu */
+  function feed(key, rawUnit, ts, ctx) {
+    const c = SL()[key], s = SENSORS.find(x => x.key === key);
+    live.raw[key] = rawUnit;
+    if (rawUnit === null || rawUnit === undefined || !isFinite(rawUnit)) return;
+    const corr = c.a * rawUnit + c.b;
+    const v = U.toSI(s.dim, corr, c.unit, ctx);
+    if (!isFinite(v)) return;
+    const b = live.buf[key] = live.buf[key] || [];
+    if (!(state.influx.newOnly && ts !== undefined && live.lastTs[key] === ts && b.length)) b.push(v);
+    live.lastTs[key] = ts;
+    trimAvg(key);
+  }
+  /** Demo için: SI değerden sensörün ham çıkışını üretir (a·x+b'nin tersi) */
+  function rawFromSI(key, v, ctx) {
+    const c = SL()[key], s = SENSORS.find(x => x.key === key);
+    return (U.fromSI(s.dim, v, c.unit, ctx) - c.b) / (c.a || 1);
   }
   const avgCount = k => (live.buf[k] || []).length;
+  const pAbs = v => v + (state.sensors.pGauge ? PATM : 0);
+
+  /** Ortalaması alınmış güncel değerler (SI) */
+  function currentValues() {
+    const v = live.val;
+    const dp = state.sensors.dpMode === 'diff'
+      ? (isFinite(v.p1) && isFinite(v.p2) ? v.p1 - v.p2 : undefined)
+      : v.dp;
+    return {
+      dp, p1: sensorOn('p1') && isFinite(v.p1) ? pAbs(v.p1) : undefined,
+      q: sensorOn('q') ? v.q : undefined, T: sensorOn('T') ? v.T : undefined, rho: sensorOn('rho') ? v.rho : undefined
+    };
+  }
 
   function checkMixed() {
     $('mixedWarn').classList.toggle('show', VF.Influx.isMixed(state.influx));
@@ -843,7 +1046,7 @@
     $('btnLive').textContent = demo ? '▶ Başlat' : '■ Durdur';
     $('btnDemo').textContent = demo ? '■ Demo Durdur' : 'Demo Modu';
     setLed(demo ? 'demo' : 'on', demo ? 'Demo verisi' : 'Bağlanıyor…');
-    log(demo ? 'Demo modu başladı (sentetik veri)' : `Sorgulama başladı · ${state.influx.rate} sn aralık`);
+    log(demo ? 'Demo modu başladı (sentetik veri)' : `Sorgulama başladı · ${state.influx.rateMs} ms aralık`);
     if (!demo) sensorsList().forEach(s => log('InfluxQL: ' + VF.Influx.sensorQuery(state.influx, s)));
     schedule(0);
   }
@@ -852,10 +1055,12 @@
     const was = live.running;
     live.running = false;
     clearTimeout(live.timer);
+    if (!$('btnLive')) return;
     $('btnLive').textContent = '▶ Başlat';
     $('btnDemo').textContent = 'Demo Modu';
     if (was && !silent) { log('Durduruldu'); setLed('', 'Telemetri kapalı'); }
     if (!silent) { live.point = null; VF.ChartView.updateLive(null, live.trail); liveRender(); }
+    if (silent && was) setLed('', 'Telemetri kapalı');
   }
 
   function schedule(ms) {
@@ -864,74 +1069,85 @@
 
   async function tick() {
     if (!live.running) return;
-    const ix = state.influx;
     const t0 = Date.now();
     try {
       if (live.demo) {
         if (!lastCalc) throw new Error('Geçerli tasarım yok');
-        live.phase += 1;
+        // Zaman tabanlı yavaş değişim (yenileme periyodundan bağımsız)
+        live.phase = Date.now() / 1000;
         const { res, c } = lastCalc;
-        const base = c.qMax * (0.55 + 0.25 * Math.sin(live.phase / 12));
-        const T = c.inp.T + 15 * Math.sin(live.phase / 40);
+        const base = c.qMax * (0.55 + 0.25 * Math.sin(live.phase / 45));
+        const T = c.inp.T + 15 * Math.sin(live.phase / 180);
         const pr = F.resolve(activeFluid(), T, c.inp.p1);
-        const ts = Date.now();
-        let dpDemo = res.model.dpFromFlow(base) * (pr.rho > 0 ? c.fl.rho / pr.rho : 1);
+        const ctx = { rho: pr.rho };
+        let dp = res.model.dpFromFlow(base) * (pr.rho > 0 ? c.fl.rho / pr.rho : 1);
         if (VF.CalibUI.active()) {
-          // Kalibrasyon aktifse "tesis", kalibre modele uyacak şekilde davranır
-          for (let k = 0; k < 6; k++) { const q = VF.CalibUI.predict(dpDemo, pr.rho, pr.mu); if (q > 0) dpDemo *= Math.pow(base / q, 2); }
+          for (let k = 0; k < 6; k++) { const q = VF.CalibUI.predict(dp, pr.rho, pr.mu); if (q > 0) dp *= Math.pow(base / q, 2); }
         }
-        feed('dp', dpDemo * (1 + (Math.random() - 0.5) * 0.02), ts);
-        feed('q', ix.q.enabled ? base * (1 + 0.004 + (Math.random() - 0.5) * 0.006) : null, ts);
-        feed('T', ix.T.enabled ? T + (Math.random() - 0.5) * 0.2 : null, ts);
-        feed('rho', ix.rho.enabled ? pr.rho * (1 + (Math.random() - 0.5) * 0.0004) : null, ts);
+        dp *= 1 + (Math.random() - 0.5) * 0.02;
+        const ts = Date.now();
+        const p1g = c.inp.p1 - (state.sensors.pGauge ? PATM : 0);
+        if (sensorOn('dp')) feed('dp', rawFromSI('dp', dp, ctx), ts, ctx);
+        if (sensorOn('p1')) feed('p1', rawFromSI('p1', p1g * (1 + (Math.random() - 0.5) * 0.001), ctx), ts, ctx);
+        if (sensorOn('p2')) feed('p2', rawFromSI('p2', p1g - dp, ctx), ts, ctx);
+        if (sensorOn('q')) feed('q', rawFromSI('q', base * (1 + 0.004 + (Math.random() - 0.5) * 0.006), ctx), ts, ctx);
+        if (sensorOn('T')) feed('T', rawFromSI('T', T + (Math.random() - 0.5) * 0.2, ctx), ts, ctx);
+        if (sensorOn('rho')) feed('rho', rawFromSI('rho', pr.rho * (1 + (Math.random() - 0.5) * 0.0004), ctx), ts, ctx);
         live.time = ts;
       } else {
-        const data = await VF.Influx.fetchLast(ix, sensorsList());
-        if (!data.dp) throw new VF.Influx.InfluxError('nodata', 'ΔP sensörü için veri bulunamadı (measurement/field/tag kontrol edin).');
-        feed('dp', U.toSI('pressure', data.dp.value, ix.dp.unit), data.dp.time);
-        if (data.T) feed('T', U.toSI('temperature', data.T.value, ix.T.unit), data.T.time);
-        if (data.rho) feed('rho', U.toSI('density', data.rho.value, ix.rho.unit), data.rho.time);
+        const data = await VF.Influx.fetchLast(state.influx, sensorsList());
+        live.stale = {};
+        sensorsList().forEach(s => { if (!data[s.key]) live.stale[s.key] = true; });
+        const need = state.sensors.dpMode === 'diff' ? ['p1', 'p2'] : ['dp'];
+        const miss = need.filter(k => !data[k]);
+        if (miss.length) throw new VF.Influx.InfluxError('nodata', `${miss.map(k => SL()[k].name).join(', ')} için son ${state.influx.windowMin} dk içinde veri yok (sensör adını / measurement'ı kontrol edin).`);
+        // Sıralama: önce T ve ρ (hacimsel debi dönüşümü yoğunluğa bağlı)
+        ['T', 'rho', 'dp', 'p1', 'p2'].forEach(k => { if (data[k]) feed(k, data[k].value, data[k].time); });
         if (data.q) {
           const rho = live.val.rho > 0 ? live.val.rho : liveProps().rho;
-          feed('q', U.toSI('flow', data.q.value, ix.q.unit, { rho }), data.q.time);
+          feed('q', data.q.value, data.q.time, { rho });
         }
-        live.time = data.dp.time;
-        setLed('on', 'Canlı · ' + new Date(live.time).toLocaleTimeString('tr-TR'));
+        const t = data[need[0]].time;
+        live.time = t;
+        const age = (Date.now() - t) / 1000;
+        setLed(age > 30 ? 'err' : 'on', (age > 30 ? 'Eski veri · ' : 'Canlı · ') + new Date(t).toLocaleTimeString('tr-TR'));
       }
       liveRecompute(true);
     } catch (e) {
       handleErr(e);
     }
-    if (live.running) schedule(Math.max(200, ix.rate * 1000 - (Date.now() - t0)));
+    if (live.running) schedule(Math.max(250, state.influx.rateMs - (Date.now() - t0)));
   }
 
-  /** Canlı sıcaklık/yoğunluğa göre akışkan özellikleri */
+  /** Canlı sıcaklık/yoğunluk/basınca göre akışkan özellikleri */
   function liveProps() {
     const c = lastCalc ? lastCalc.c : context();
-    const T = state.influx.T.enabled && live.val.T > 0 ? live.val.T : c.inp.T;
-    const pr = F.resolve(activeFluid(), T, c.inp.p1);
-    const rho = state.influx.rho.enabled && live.val.rho > 0 ? live.val.rho : pr.rho;
-    return { T, rho, mu: pr.mu };
+    const v = currentValues();
+    const T = v.T > 0 ? v.T : c.inp.T;
+    const p1 = v.p1 > 0 ? v.p1 : c.inp.p1;
+    const pr = F.resolve(activeFluid(), T, p1);
+    const rho = v.rho > 0 ? v.rho : pr.rho;
+    return { T, p1, rho, mu: pr.mu, pv: pr.pv };
   }
 
   /** Canlı (ortalama) ΔP'den debi hesabı + grafikteki kırmızı noktanın konumu */
   function liveRecompute(push) {
-    const dp = live.val.dp;
+    const v = currentValues();
+    const dp = v.dp;
     if (!lastCalc || !(dp > 0) || !live.running) { liveRender(); return; }
     const { c } = lastCalc;
     const ctx = c.ctx;
     const pp = liveProps();
-    // Teorik: canlı yoğunlukla; kalibre: canlı ρ ve μ(T) ile
-    const mTheory = P.model({ ...c.inp, fluid: { ...c.fl, rho: pp.rho, mu: pp.mu } });
+    const mTheory = P.model({ ...c.inp, p1: pp.p1, fluid: { ...c.fl, rho: pp.rho, mu: pp.mu } });
     live.qTheory = mTheory.flowFromDp(dp);
     const qCal = VF.CalibUI.predict(dp, pp.rho, pp.mu);
     live.calibrated = qCal !== null;
     live.qCalc = live.calibrated ? qCal : live.qTheory;
-    const qMeas = state.influx.q.enabled && live.val.q > 0 ? live.val.q : null;
-    live.qMeas = qMeas;
-    const qShow = qMeas !== null ? qMeas : live.qCalc;
+    live.qMeas = v.q > 0 ? v.q : null;
+    live.cav = c.fl.type === 'liquid' ? pp.p1 - dp - pp.pv : null;
+    const qShow = live.qMeas !== null ? live.qMeas : live.qCalc;
     const pt = { x: U.fromSI('flow', qShow, state.units.flow, ctx), y: U.fromSI('pressure', dp, state.units.pressure) };
-    live.dev = qMeas !== null && live.qCalc > 0 ? (qMeas - live.qCalc) / live.qCalc * 100 : null;
+    live.dev = live.qMeas !== null && live.qCalc > 0 ? (live.qMeas - live.qCalc) / live.qCalc * 100 : null;
     pt.label = `${U.fmt(pt.x, 4)} ${D.fu()} · ${U.fmt(pt.y, 4)} ${D.pu()}` + (live.dev !== null ? ` · Δ ${live.dev >= 0 ? '+' : ''}${live.dev.toFixed(2)}%` : '');
     live.point = pt;
     if (push) {
@@ -948,30 +1164,43 @@
     const box = $('liveVals');
     if (!box) return;
     const ctx = lastCalc ? lastCalc.c.ctx : { rho: 1000 };
-    const has = live.running && live.val.dp > 0;
-    const ix = state.influx;
-    const n = avgWindow();
-    const a = state.influx.avg;
-    $('maInfo').textContent = a.mode === 'off' ? 'kapalı' : a.mode === 'all' ? `kümülatif · ${avgCount('dp')} veri` : `${avgCount('dp')}/${n} veri`;
-    const cell = (k, v, raw, cls, title) => `<div ${title ? `title="${esc(title)}"` : ''}><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div>${raw ? `<div class="raw">${raw}</div>` : ''}</div>`;
-    const rawTxt = (key, f) => has && live.raw[key] !== undefined && a.mode !== 'off' ? 'ham: ' + f(live.raw[key]) : '';
-    const fp = v => `${D.p(v)} ${D.pu()}`;
-    const ft = v => `${U.fmt(U.fromSI('temperature', v, state.units.temperature), 4)} ${U.label('temperature', state.units.temperature)}`;
-    const fr = v => `${U.fmt(U.fromSI('density', v, state.units.density), 5)} ${U.label('density', state.units.density)}`;
-    const ff = v => `${D.flow(v, ctx)} ${D.fu()}`;
+    const v = currentValues();
+    const has = live.running && v.dp > 0;
+    // Her sensör kartının altında ham / düzeltilmiş / ortalama değer
+    SENSORS.forEach(s => {
+      const el = document.querySelector(`[data-sv="${s.key}"]`);
+      if (!el) return;
+      const c = SL()[s.key];
+      if (!live.running || !sensorOn(s.key)) { el.textContent = ''; return; }
+      if (live.stale[s.key]) { el.innerHTML = `<span class="badv">veri yok (son ${state.influx.windowMin} dk)</span>`; return; }
+      const raw = live.raw[s.key];
+      if (raw === undefined) { el.textContent = 'bekleniyor…'; return; }
+      const avg = live.val[s.key];
+      const ul = U.label(s.dim, c.unit);
+      const avgU = avg !== undefined ? U.fromSI(s.dim, avg, c.unit, { rho: v.rho || ctx.rho }) : NaN;
+      el.innerHTML = `ham <b>${U.fmt(raw, 5)}</b>${c.a !== 1 || c.b !== 0 ? ` → düz. <b>${U.fmt(c.a * raw + c.b, 5)}</b>` : ''} · ort. <b>${U.fmt(avgU, 5)}</b> ${ul} <span class="hint">(${avgCount(s.key)}/${c.avg.mode === 'all' ? '∞' : avgWindow(s.key)})</span>`;
+    });
+    const cell = (k, val, sub, cls, title) => `<div ${title ? `title="${esc(title)}"` : ''}><div class="k">${k}</div><div class="v ${cls || ''}">${val}</div>${sub ? `<div class="raw">${sub}</div>` : ''}</div>`;
+    const fp = x => `${D.p(x)} ${D.pu()}`;
+    const ft = x => `${U.fmt(U.fromSI('temperature', x, state.units.temperature), 4)} ${U.label('temperature', state.units.temperature)}`;
+    const fr = x => `${U.fmt(U.fromSI('density', x, state.units.density), 5)} ${U.label('density', state.units.density)}`;
+    const ff = x => `${D.flow(x, ctx)} ${D.fu()}`;
+    const pp = has ? liveProps() : null;
     let devCell = cell('Sapma', '—');
     if (has && live.dev !== null && lastCalc) {
-      const u = live.calibrated ? VF.CalibUI.uncertainty() : P.uncertainty(lastCalc.res.model, lastCalc.c.inp, live.val.dp).total;
+      const u = live.calibrated ? VF.CalibUI.uncertainty() : P.uncertainty(lastCalc.res.model, lastCalc.c.inp, v.dp).total;
       const ok = Math.abs(live.dev) <= u;
       devCell = cell('Sapma (Coriolis − hesap)', `${live.dev >= 0 ? '+' : ''}${live.dev.toFixed(2)}% ${ok ? '✓' : '✗'}`, `sınır ±%${u.toFixed(2)} (${live.calibrated ? 'kalibre' : 'teorik'})`, ok ? 'okv' : 'badv');
     }
     box.innerHTML = [
-      cell('ΔP (ortalama)', has ? fp(live.val.dp) : '—', rawTxt('dp', fp), 'red'),
-      cell('Sıcaklık', ix.T.enabled && live.val.T > 0 ? ft(live.val.T) : has ? ft(liveProps().T) : '—', ix.T.enabled ? rawTxt('T', ft) : has ? 'tasarım değeri' : ''),
-      cell('Yoğunluk', ix.rho.enabled && live.val.rho > 0 ? fr(live.val.rho) : has ? fr(liveProps().rho) : '—', ix.rho.enabled ? rawTxt('rho', fr) : has ? 'ρ(T) tablodan' : ''),
+      cell(state.sensors.dpMode === 'diff' ? 'ΔP = P1 − P2' : 'ΔP (ortalama)', has ? fp(v.dp) : '—', '', 'red'),
+      cell('Giriş basıncı p₁ (mutlak)', pp ? fp(pp.p1) : '—', pp ? (v.p1 > 0 ? 'canlı P1' : 'tasarım değeri') : ''),
+      cell('Sıcaklık', pp ? ft(pp.T) : '—', pp ? (v.T > 0 ? 'canlı' : 'tasarım değeri') : ''),
+      cell('Yoğunluk', pp ? fr(pp.rho) : '—', pp ? (v.rho > 0 ? 'canlı (Coriolis)' : 'ρ(T) tablodan') : ''),
       cell(`Debi (hesap · ${live.calibrated ? 'kalibre' : 'teorik'})`, has ? ff(live.qCalc) : '—', has && live.calibrated ? 'teorik: ' + ff(live.qTheory) : ''),
-      cell('Debi (Coriolis)', has && live.qMeas !== null ? ff(live.qMeas) : '—', ix.q.enabled ? rawTxt('q', ff) : 'sensör kapalı'),
-      devCell
+      cell('Debi (Coriolis)', has && live.qMeas !== null ? ff(live.qMeas) : '—', sensorOn('q') ? '' : 'sensör kapalı'),
+      devCell,
+      cell('Kavitasyon payı p₂ − pᵥ', has && live.cav !== null ? fp(live.cav) : '—', has && live.cav !== null ? (live.cav <= 0 ? 'KAVİTASYON!' : 'güvenli') : '', has && live.cav !== null && live.cav <= 0 ? 'badv' : '')
     ].join('');
   }
 
@@ -1011,25 +1240,22 @@
    * Yedekleme / PDF / tema / yardım
    * ============================================================ */
   function exportJson() {
-    const data = { app: 'VenturiFlow Master', version: 1, exportedAt: new Date().toISOString(), state };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `venturiflow_yedek_${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    snapshotVenturi();
+    download(`venturiflow_yedek_${new Date().toISOString().slice(0, 10)}.json`,
+      { app: 'VenturiFlow Master', kind: 'full', version: 2, exportedAt: new Date().toISOString(), state });
     UI.toast('Yedek dosyası indirildi' + (state.influx.pass ? ' (InfluxDB parolası dosyada bulunuyor!)' : ''), state.influx.pass ? 'warn' : 'ok');
   }
 
   async function importJson(file) {
     try {
       const data = JSON.parse(await file.text());
+      if (data.kind === 'venturi') return importVenturi(data);
       const s = data.state || data;
-      if (!s || typeof s !== 'object' || !s.inputs) throw new Error('Geçerli bir VenturiFlow yedeği değil.');
+      if (!s || typeof s !== 'object' || !(s.inputs || s.venturis)) throw new Error('Geçerli bir VenturiFlow yedeği değil.');
       stopLive(true);
-      state = merge(defaults(), s);
-      if (!state.fluids.find(f => f.id === state.activeFluid)) state.activeFluid = state.fluids[0].id;
+      state = migrate(merge(defaults(), s), s);
       initUI();
+      save();
       UI.toast('Yedek geri yüklendi: ' + file.name, 'ok');
     } catch (e) { UI.toast('İçe aktarma hatası: ' + e.message, 'err'); }
   }
@@ -1053,6 +1279,7 @@
       const rowsRes = (label, fn, hl) => [label, fn(r), fn(rm), hl];
       const rep = {
         date: new Date().toLocaleString('tr-TR'),
+        venturiName: activeVenturi() ? activeVenturi().name + (activeVenturi().note ? ' — ' + activeVenturi().note : '') : '',
         method: P.STANDARDS[c.inp.method].name,
         typeName: r.model.typeName,
         fluidName: activeFluid().name,
@@ -1114,6 +1341,7 @@
       : '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4l1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4m11.4-11.4l1.4-1.4"/>';
     VF.ChartView.applyTheme();
     VF.CalibUI.onThemeChange();
+    if (fluidChart) { fluidChart.destroy(); fluidChart = null; }
   }
 
   function showHelp() {
@@ -1125,6 +1353,7 @@
         <li>Göstergeler, ölçekli çizim, performans eğrisi ve formül paneli anında güncellenir. <b>What-If</b> kaydırıcısı ile çalışma noktasını değiştirin.</li>
         <li><b>Canlı</b> sekmesinden InfluxDB v1 bağlantısını kurun; ölçülen ΔP grafikte kırmızı nokta olarak görünür. Debi sensörü eklenirse sapma, belirsizlik sınırına göre değerlendirilir.</li>
         <li><b>JSON Yedekle</b> ile tüm ayarları saklayın, <b>PDF Rapor</b> ile A4 raporu indirin.</li>
+        <li><b>Venturi</b> seçici (üst çubuk): Her venturinin verisi ayrı saklanır. <b>＋</b> yeni venturi, <b>⧉</b> mevcut venturinin kopyası, <b>☰ Venturiler</b> listeleme, yeniden adlandırma, not, silme ve tek venturi dışa/içe aktarma.</li>
         <li><b>Kalibrasyon &amp; PLC</b> ekranı: Coriolis referanslı test noktalarından 6 farklı model uydurulur, çapraz doğrulamayla en uygunu önerilir ve TwinCAT 3 / IEC ST kodu üretilir.</li>
         <li><b>☁ Ortak</b> düğmesi: ortak parola bir kez girildiğinde tasarımlar GitHub üzerinden tüm bilgisayarlarla otomatik eşitlenir. Parolası olmayan bilgisayarlar salt okunur çalışır.</li></ol>
         <h4>Grafik</h4><ul>
@@ -1155,6 +1384,7 @@
     // Canlı sekme alanlarını yeniden doldur
     bindLiveFields();
     selectTab(state.tab);
+    renderVenturiSelect();
     fxSig = '';
     recalc();
     showView(state.view);
@@ -1164,11 +1394,129 @@
   function bindLiveFields() {
     if (!liveBound) { bindLiveTab(); liveBound = true; return; }
     const ix = state.influx;
-    const set = (id, v) => { $(id).value = v; };
+    const set = (id, v) => { const el = $(id); if (el.type === 'checkbox') el.checked = !!v; else el.value = v; };
     set('ixUrl', ix.url); set('ixDb', ix.db); set('ixUser', ix.user); set('ixPass', ix.pass); set('ixMeas', ix.measurement);
-    set('ixRate', String(ix.rate));
+    set('ixNameMode', ix.nameMode); set('ixTagKey', ix.tagKey); set('ixValueField', ix.valueField);
+    set('ixRateMs', ix.rateMs); set('ixWindow', ix.windowMin); set('maNewOnly', ix.newOnly);
+    $('ixTagOpts').hidden = ix.nameMode !== 'tag';
     renderSensors();
     checkMixed();
+  }
+
+  /* ---------- Çoklu venturi ---------- */
+  const vid = () => 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const activeVenturi = () => state.venturis.find(v => v.id === state.activeVenturi);
+
+  function uniqueName(base) {
+    const names = new Set(state.venturis.map(v => v.name));
+    if (!names.has(base)) return base;
+    for (let i = 2; ; i++) if (!names.has(`${base} (${i})`)) return `${base} (${i})`;
+  }
+
+  /** Başka bir venturiye geçer: mevcut çalışma alanı kaydedilir, seçilenin verisi yüklenir */
+  function switchVenturi(id) {
+    if (id === state.activeVenturi) return;
+    const rec = state.venturis.find(v => v.id === id);
+    if (!rec) return;
+    snapshotVenturi();
+    stopLive(true);
+    resetAvg();
+    live.trail = []; live.point = null;
+    state.activeVenturi = id;
+    loadVData(state, rec.data);
+    initUI();
+    save();
+    UI.toast(`"${rec.name}" açıldı`, 'ok');
+  }
+
+  /** Yeni venturi: copyFromId verilirse onun kopyası, yoksa varsayılan değerler */
+  function newVenturi(copyFromId, name) {
+    snapshotVenturi();
+    const src = copyFromId && state.venturis.find(v => v.id === copyFromId);
+    const now = new Date().toISOString();
+    const rec = {
+      id: vid(),
+      name: uniqueName(name || (src ? src.name + ' — kopya' : `Venturi ${state.venturis.length + 1}`)),
+      note: src ? src.note : '',
+      created: now, updated: now,
+      data: src ? clone(src.data) : pickV(defaults())
+    };
+    state.venturis.push(rec);
+    state.activeVenturi = rec.id;
+    loadVData(state, rec.data);
+    stopLive(true); resetAvg();
+    initUI(); save();
+    UI.toast(src ? `Kopya oluşturuldu: "${rec.name}"` : `Yeni venturi: "${rec.name}"`, 'ok');
+    return rec;
+  }
+
+  function deleteVenturi(id) {
+    if (state.venturis.length <= 1) { UI.toast('Son venturi silinemez.', 'err'); return false; }
+    const i = state.venturis.findIndex(v => v.id === id);
+    if (i < 0) return false;
+    state.venturis.splice(i, 1);
+    if (id === state.activeVenturi) {
+      state.activeVenturi = state.venturis[Math.max(0, i - 1)].id;
+      loadVData(state, activeVenturi().data);
+      stopLive(true); resetAvg();
+      initUI();
+    } else renderVenturiSelect();
+    save();
+    return true;
+  }
+
+  function updateVenturiMeta(id, patch) {
+    const rec = state.venturis.find(v => v.id === id);
+    if (!rec) return;
+    if (patch.name !== undefined) rec.name = patch.name.trim() || rec.name;
+    if (patch.note !== undefined) rec.note = patch.note;
+    rec.updated = new Date().toISOString();
+    renderVenturiSelect(); save();
+  }
+
+  /** Tek venturiyi (kullandığı akışkan tanımıyla birlikte) JSON dosyası olarak indirir */
+  function exportVenturi(id) {
+    snapshotVenturi();
+    const rec = state.venturis.find(v => v.id === id);
+    if (!rec) return;
+    const fluid = state.fluids.find(f => f.id === rec.data.activeFluid);
+    download(`venturi_${rec.name.replace(/[^\wçğıöşüÇĞİÖŞÜ-]+/g, '_')}.json`,
+      { app: 'VenturiFlow Master', kind: 'venturi', version: 2, exportedAt: new Date().toISOString(), venturi: rec, fluid: fluid || null });
+  }
+
+  /** Tek venturi dosyasını yeni bir kayıt olarak ekler */
+  function importVenturi(obj) {
+    const rec = clone(obj.venturi);
+    if (!rec || !rec.data) throw new Error('Venturi verisi bulunamadı.');
+    if (obj.fluid && !state.fluids.find(f => f.id === obj.fluid.id)) state.fluids.push(clone(obj.fluid));
+    snapshotVenturi();
+    rec.id = vid();
+    rec.name = uniqueName(rec.name || 'İçe aktarılan venturi');
+    rec.updated = new Date().toISOString();
+    state.venturis.push(rec);
+    state.activeVenturi = rec.id;
+    loadVData(state, rec.data);
+    stopLive(true); resetAvg();
+    initUI(); save();
+    UI.toast(`"${rec.name}" içe aktarıldı`, 'ok');
+  }
+
+  function download(name, obj) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function renderVenturiSelect() {
+    const sel = $('selVenturi');
+    if (!sel) return;
+    sel.innerHTML = state.venturis.map(v => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join('');
+    sel.value = state.activeVenturi;
+    const rec = activeVenturi();
+    $('stVenturi').textContent = rec ? 'Venturi: ' + rec.name : '';
   }
 
   /* ---------- Görünüm: Tasarım & İzleme / Kalibrasyon & PLC ---------- */
@@ -1186,6 +1534,7 @@
   Object.defineProperty(VF, 'state', { get: () => state });
   VF.App = {
     get state() { return state; },
+    switchVenturi, newVenturi, deleteVenturi, updateVenturiMeta, exportVenturi, importVenturi, snapshotVenturi, activeVenturi,
     showMixedGuide, recalc, save, context, activeFluid, showView, selectTab,
     toast: (m, k) => UI.toast(m, k), modal: o => UI.modal(o)
   };
@@ -1194,6 +1543,7 @@
     state.tab = t;
     document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
     document.querySelectorAll('.tab').forEach(s => s.classList.toggle('on', s.id === 'tab-' + t));
+    if (t === 'fluid' && lastCalc) renderFluidChart(lastCalc.c);
     save();
   }
 
@@ -1201,6 +1551,7 @@
     $('tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) selectTab(b.dataset.tab); });
     $('viewSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) showView(b.dataset.view); });
     VF.CalibUI.init(VF.App);
+    VF.VenturiUI.init(VF.App);
     $('selMethod').addEventListener('change', e => { state.method = e.target.value; recalc(); });
     $('selMfg').addEventListener('change', e => { state.mfg = e.target.value; recalc(); });
     $('selFitting').addEventListener('change', e => { state.fitting = e.target.value; recalc(); });

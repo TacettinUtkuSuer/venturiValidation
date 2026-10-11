@@ -27,7 +27,7 @@
   <script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>
 
   <!-- Önbellek kırıcı: her sürümde ?v= değeri (ve altbilgideki sürüm) artırılır; tarayıcı yeni dosyaları indirir -->
-  <link rel="stylesheet" href="css/app.css?v=1.3.0">
+  <link rel="stylesheet" href="css/app.css?v=1.4.0">
 </head>
 <body>
 <div class="app">
@@ -45,8 +45,13 @@
       <button data-view="main" class="on">Tasarım &amp; İzleme</button>
       <button data-view="calib">Kalibrasyon &amp; PLC</button>
     </div>
-    <span class="pill">Standart: <b id="pillStd">—</b></span>
-    <span class="pill">Akışkan: <b id="pillFluid">—</b></span>
+    <div class="vbar" title="Aktif venturi — her venturinin tasarımı, sensörleri, ölçümleri ve kalibrasyonu ayrı saklanır">
+      <span class="vlbl">Venturi</span>
+      <select id="selVenturi"></select>
+      <button class="btn sm icon" id="btnVNew" title="Yeni venturi (varsayılan değerlerle)">＋</button>
+      <button class="btn sm icon" id="btnVCopy" title="Bu venturiyi kopyala">⧉</button>
+      <button class="btn sm" id="btnVManage" title="Tüm venturiler: aç, yeniden adlandır, not, kopyala, sil, dışa/içe aktar">☰ Venturiler</button>
+    </div>
     <span class="pill"><span class="led" id="liveLed"></span><span id="liveText">Telemetri kapalı</span></span>
     <div class="err-banner" id="errBanner"></div>
     <div class="spacer"></div>
@@ -124,6 +129,14 @@
         <div class="sec">Çalışma Koşullarında <span class="r" id="fCond"></span></div>
         <div class="infobox" id="fResolved"></div>
 
+        <div class="sec">Sıcaklığa Bağlı Özellikler
+          <select id="fcProp" class="r" style="width:auto;height:28px;font-size:12.5px;text-transform:none;letter-spacing:0">
+            <option value="rho">Yoğunluk ρ</option><option value="mu">Dinamik viskozite μ</option>
+            <option value="nu">Kinematik viskozite ν</option><option value="pv">Buhar basıncı pᵥ</option>
+          </select></div>
+        <div class="fluid-chart"><canvas id="fluidChart"></canvas></div>
+        <p class="note" id="fcNote"></p>
+
         <div class="sec">Akıllı CSV İçe Aktarma</div>
         <p class="note">Özellik tablosu (T–ρ–μ–p<sub>v</sub>) veya doğrulama için ölçüm verisi (Debi–ΔP) yükleyin. Sütun sırası ve birimler eşleştirme ekranında seçilir.</p>
         <div class="btnrow">
@@ -136,41 +149,38 @@
 
       <!-- CANLI -->
       <section class="tab" id="tab-live">
-        <div class="sec">InfluxDB v1.x (InfluxQL)</div>
+        <div class="sec">InfluxDB v1.x (InfluxQL) <span class="r">tüm venturiler için ortak</span></div>
         <label class="row"><span>URL</span><input type="url" id="ixUrl" placeholder="http://10.10.2.6:8086"></label>
-        <label class="row"><span>Veritabanı</span><input type="text" id="ixDb" placeholder="db"></label>
-        <label class="row"><span>Kullanıcı <span class="hint">(ops.)</span></span><input type="text" id="ixUser" autocomplete="off"></label>
-        <label class="row"><span>Parola <span class="hint">(ops.)</span></span><input type="password" id="ixPass" autocomplete="new-password"></label>
-        <label class="row"><span>Measurement</span><input type="text" id="ixMeas" placeholder="venturi"></label>
+        <label class="row"><span>Veritabanı (db)</span><input type="text" id="ixDb" placeholder="lc_100"></label>
+        <label class="row"><span>Measurement</span><input type="text" id="ixMeas" placeholder="telemetry"></label>
+        <label class="row"><span>Kullanıcı <span class="hint">(boşsa kullanılmaz)</span></span><input type="text" id="ixUser" autocomplete="off"></label>
+        <label class="row"><span>Parola</span><input type="password" id="ixPass" autocomplete="new-password"></label>
+        <label class="row"><span>Sensör adı nerede?</span>
+          <select id="ixNameMode"><option value="field">Field adı (ör. P1)</option><option value="tag">Tag değeri</option></select></label>
+        <div id="ixTagOpts">
+          <label class="row"><span>Tag anahtarı</span><input type="text" id="ixTagKey" placeholder="name"></label>
+          <label class="row"><span>Değer field'ı</span><input type="text" id="ixValueField" placeholder="value"></label>
+        </div>
+        <label class="row"><span>Yenileme periyodu</span><div class="inp"><input type="number" id="ixRateMs" min="250" step="50"><span class="unit-static">ms</span></div></label>
+        <label class="row"><span>Sorgu penceresi <span class="hint">(eski veri koruması)</span></span><div class="inp"><input type="number" id="ixWindow" min="0" step="1"><span class="unit-static">dk</span></div></label>
         <div class="mixed-warn" id="mixedWarn">⚠ Sayfa HTTPS, InfluxDB HTTP: tarayıcı istekleri engelleyebilir. <a id="lnkGuide">İzin verme rehberi →</a></div>
 
-        <div class="sec">Sensörler <span class="r">field · tag anahtarı = değeri · birim</span></div>
+        <div class="sec">ΔP Kaynağı <span class="r">bu venturiye özel</span></div>
+        <div class="seg" id="dpModeSeg"><button data-v="direct">ΔP sensörü (doğrudan)</button><button data-v="diff">P1 − P2</button></div>
+        <div class="row" style="margin-top:8px"><span>P1 / P2 basınç tipi</span>
+          <div class="seg" id="pGaugeSeg"><button data-v="1">Gösterge (bar g)</button><button data-v="0">Mutlak</button></div></div>
+
+        <div class="sec">Sensörler <span class="r">ad · birim · düzeltme a·x+b · ort.</span></div>
         <div id="ixSensors"></div>
+        <label class="chkrow"><input type="checkbox" id="maNewOnly"> Ortalamaya yalnız yeni zaman damgalı veriyi ekle <span class="hint">(aynı değer tekrar sayılmaz)</span></label>
 
         <div class="sec">Sorgulama</div>
-        <label class="row"><span>Yenileme sıklığı</span>
-          <select id="ixRate">
-            <option value="1">1 sn</option><option value="2">2 sn</option><option value="5">5 sn</option>
-            <option value="10">10 sn</option><option value="30">30 sn</option><option value="60">60 sn</option>
-          </select></label>
         <div class="btnrow">
           <button class="btn sm" id="btnPing">Bağlantı Testi</button>
           <button class="btn primary sm" id="btnLive">▶ Başlat</button>
           <button class="btn sm" id="btnDemo" title="InfluxDB olmadan sentetik veri">Demo Modu</button>
         </div>
-        <div class="sec">Hareketli Ortalama <span class="r" id="maInfo"></span></div>
-        <label class="row"><span>Pencere</span>
-          <div class="inp" style="gap:6px">
-            <select id="maMode" style="border-radius:5px;width:auto;flex:1;border-left:1px solid var(--border-hi);background:var(--input-bg)">
-              <option value="off">Kapalı (ham değer)</option>
-              <option value="3">Son 3 veri</option><option value="5">Son 5 veri</option><option value="6">Son 6 veri</option>
-              <option value="10">Son 10 veri</option><option value="12">Son 12 veri</option><option value="20">Son 20 veri</option>
-              <option value="30">Son 30 veri</option><option value="custom">Özel…</option><option value="all">Tümü (kümülatif)</option>
-            </select>
-            <input type="number" id="maN" min="1" max="1000" step="1" style="width:76px;flex:none;border-radius:5px" title="Özel pencere boyu">
-          </div></label>
-        <label class="chkrow"><input type="checkbox" id="maNewOnly"> Yalnız yeni zaman damgalı veriyi ekle <span class="hint">(aynı değer tekrar sayılmaz)</span></label>
-        <div class="btnrow"><button class="btn sm" id="maReset">Ortalamayı sıfırla</button>
+        <div class="btnrow"><button class="btn sm" id="maReset">Ortalamaları sıfırla</button>
           <button class="btn sm primary" id="btnToCal" title="Anlık ortalama ΔP, Coriolis debi, T ve ρ değerlerini kalibrasyon tablosuna ekler">＋ Kalibrasyona ekle</button></div>
         <div class="live-vals" id="liveVals"></div>
         <div class="log" id="ixLog"></div>
@@ -306,28 +316,30 @@
   </main>
 
   <footer class="statusbar">
+    <b id="stVenturi"></b>
     <span id="stCalc">Hazır</span>
     <span id="stSave"></span>
     <span class="sep"></span>
     <span>Ayarlar tarayıcıda saklanır · ☁ Ortak kayıt ile GitHub üzerinden paylaşılır</span>
-    <span>v1.3.0</span>
+    <span>v1.4.0</span>
   </footer>
 </div>
 
 <div class="toasts" id="toasts"></div>
 
-<script src="js/units.js?v=1.3.0"></script>
-<script src="js/physics.js?v=1.3.0"></script>
-<script src="js/fluids.js?v=1.3.0"></script>
-<script src="js/csv.js?v=1.3.0"></script>
-<script src="js/influx.js?v=1.3.0"></script>
-<script src="js/draw.js?v=1.3.0"></script>
-<script src="js/chart.js?v=1.3.0"></script>
-<script src="js/report.js?v=1.3.0"></script>
-<script src="js/calib.js?v=1.3.0"></script>
-<script src="js/calibui.js?v=1.3.0"></script>
-<script src="js/sync-config.js?v=1.3.0"></script>
-<script src="js/sync.js?v=1.3.0"></script>
-<script src="js/app.js?v=1.3.0"></script>
+<script src="js/units.js?v=1.4.0"></script>
+<script src="js/physics.js?v=1.4.0"></script>
+<script src="js/fluids.js?v=1.4.0"></script>
+<script src="js/csv.js?v=1.4.0"></script>
+<script src="js/influx.js?v=1.4.0"></script>
+<script src="js/draw.js?v=1.4.0"></script>
+<script src="js/chart.js?v=1.4.0"></script>
+<script src="js/report.js?v=1.4.0"></script>
+<script src="js/calib.js?v=1.4.0"></script>
+<script src="js/calibui.js?v=1.4.0"></script>
+<script src="js/sync-config.js?v=1.4.0"></script>
+<script src="js/sync.js?v=1.4.0"></script>
+<script src="js/venturis.js?v=1.4.0"></script>
+<script src="js/app.js?v=1.4.0"></script>
 </body>
 </html>

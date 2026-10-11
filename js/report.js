@@ -37,6 +37,7 @@
     }
     el.innerHTML = `
       <h1>VenturiFlow Master — Venturi Tasarım &amp; Doğrulama Raporu</h1>
+      ${rep.venturiName ? `<div style="font-size:14px;font-weight:700;margin:2px 0">${esc(rep.venturiName)}</div>` : ''}
       <div class="meta">Tarih: ${esc(rep.date)} · Metot: <b>${esc(rep.method)}</b> · ${esc(rep.typeName)} · Akışkan: <b>${esc(rep.fluidName)}</b></div>
 
       <div class="avoid"><h2>1. Ölçekli Venturi Kesiti</h2>

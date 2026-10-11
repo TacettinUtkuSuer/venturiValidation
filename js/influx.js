@@ -5,10 +5,14 @@
   const qi = s => '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
   const qs = s => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 
-  /** Tek sensör için InfluxQL: son değer */
+  /** Tek sensör için InfluxQL: son değer (isteğe bağlı zaman penceresi ve tag filtresi) */
   function sensorQuery(cfg, s) {
     let q = `SELECT last(${qi(s.field)}) FROM ${qi(s.measurement || cfg.measurement)}`;
-    if (s.tagKey && s.tagValue) q += ` WHERE ${qi(s.tagKey)} = ${qs(s.tagValue)}`;
+    const where = [];
+    const win = Number(cfg.windowMin);
+    if (win > 0) where.push(`time > now() - ${Math.round(win * 60)}s`);
+    if (s.tagKey && s.tagValue) where.push(`${qi(s.tagKey)} = ${qs(s.tagValue)}`);
+    if (where.length) q += ' WHERE ' + where.join(' AND ');
     return q;
   }
 
