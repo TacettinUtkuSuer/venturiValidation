@@ -184,7 +184,7 @@ button, input, select { font: inherit; color: inherit; }
 .row .hint, .hint { color: var(--muted); font-size: 12px; }
 .chkrow { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 13.5px; cursor: pointer; }
 .inp { display: flex; min-width: 0; }
-input[type=number], input[type=text], input[type=password], input[type=url], select {
+input[type=number], input[type=text], input[type=password], input[type=url], input[type=search], select {
   height: 33px; min-width: 0; width: 100%;
   padding: 0 9px; font-size: 14px;
   background: var(--input-bg); border: 1px solid var(--border-hi); border-radius: 5px;
@@ -225,6 +225,7 @@ a { color: var(--accent); }
 .center {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 360px 600px;
   gap: 12px;
 }
@@ -401,6 +402,54 @@ table.vm td.acts { white-space: nowrap; }
 table.vm td.acts .btn { margin-left: 3px; }
 table.vm tr.act td { background: var(--accent-soft); }
 #stVenturi { color: var(--accent); }
+
+.chart-tabs { width: auto; flex: none; }
+.chart-card .card-h { flex-wrap: wrap; row-gap: 6px; }
+.legend { flex-wrap: wrap; }
+@media (max-width: 640px) { .chart-tabs { width: 100%; } .chart-tabs button { white-space: normal; } }
+.chart-tabs button { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 600; padding: 5px 12px; }
+.trend-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; flex-wrap: wrap; }
+.trend-bar label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.trend-bar select { width: auto; }
+.trend-bar .btn { margin-left: auto; }
+.trend-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--muted); padding: 20px; pointer-events: none; }
+.trend-empty[hidden] { display: none; }
+.chart-box[hidden], .whatif[hidden], .legend[hidden], .trend-bar[hidden] { display: none; }
+.sensor .sh .zero { margin-left: auto; height: 26px; font-size: 12px; }
+
+/* ---------- Geçmiş veriden kalibrasyon ---------- */
+.hist-opts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: end; margin: 8px 0; }
+.hist-opts label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.hist-opts input[type=datetime-local] { height: 33px; background: var(--input-bg); border: 1px solid var(--border-hi); border-radius: 5px; padding: 0 8px; color: var(--text); }
+.hist-chart { position: relative; height: 220px; margin: 8px 0; }
+.hist-chart[hidden] { display: none; }
+.hist .btnrow { align-items: center; }
+.hist .btnrow .btn { flex: none; }
+@media (max-width: 900px) { .hist-opts { grid-template-columns: 1fr 1fr; } }
+
+/* ---------- Yardım (README) ---------- */
+.modal.wide:has(.help) { width: min(1400px, 96vw); height: 90vh; max-height: 90vh; }
+.modal:has(.help) .modal-b { padding: 0; overflow: hidden; flex: 1; }
+.help { display: grid; grid-template-columns: 290px minmax(0, 1fr); height: 100%; }
+.help-toc { border-right: 1px solid var(--border); padding: 10px; overflow: auto; background: var(--panel-2); }
+.help-q { margin-bottom: 8px; }
+.help-list a { display: block; padding: 4px 8px; border-radius: 5px; color: var(--text); text-decoration: none; font-size: 13.5px; }
+.help-list a.lvl-h3 { padding-left: 20px; font-size: 12.5px; color: var(--muted); }
+.help-list a:hover { background: var(--panel-3); }
+.help-list a.on { background: var(--accent-soft); color: var(--accent); }
+.help-doc { overflow: auto; padding: 14px 28px 40px; font-size: 14.5px; line-height: 1.6; }
+.help-doc h1 { font-size: 24px; margin: 6px 0 10px; color: var(--text-strong); }
+.help-doc h2 { font-size: 20px; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 2px solid var(--accent); color: var(--text-strong); }
+.help-doc h3 { font-size: 16px; margin: 20px 0 8px; color: var(--accent); }
+.help-doc table { border-collapse: collapse; margin: 10px 0; font-size: 13.5px; display: block; overflow-x: auto; }
+.help-doc th, .help-doc td { border: 1px solid var(--border-hi); padding: 5px 9px; text-align: left; vertical-align: top; }
+.help-doc th { background: var(--panel-3); }
+.help-doc code { background: var(--panel-3); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.help-doc pre { background: var(--input-bg); border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; overflow: auto; }
+.help-doc pre code { background: none; padding: 0; }
+.help-doc blockquote { margin: 10px 0; padding: 8px 14px; border-left: 3px solid var(--amber); background: var(--amber-soft); }
+.help-doc hr { border: 0; border-top: 1px solid var(--border); margin: 22px 0; }
+.help-doc mjx-container[display="true"] { overflow-x: auto; overflow-y: hidden; }
 
 /* ---------- Kalibrasyon ekranı ---------- */
 .calib { display: grid; grid-template-columns: 660px minmax(0, 1fr); gap: 12px; padding: 12px; align-items: start; }

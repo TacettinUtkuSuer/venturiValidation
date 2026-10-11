@@ -67,24 +67,39 @@
   const poly = (c, x) => c.reduce((s, ci, i) => s + ci * Math.pow(x, i), 0);
 
   /* ---------------- Noktaların hazırlanması ---------------- */
+  /** Genleşme faktörü ε (gaz) — sıvıda 1 */
+  function epsOf(geo, dp, p1) {
+    if (!geo.gas) return 1;
+    if (!(p1 > dp) || !(dp > 0)) return NaN;
+    return VF.Physics.expansibility(geo.beta, (p1 - dp) / p1, geo.kappa);
+  }
+  /** Ortak değişken: h = ε·√(ρ·ΔP)  (sıvıda ε = 1) */
+  const hOf = x => (x.eps || 1) * Math.sqrt(x.rho * x.dp);
+
   /**
-   * ctx: { fluid (akışkan tanımı), p1, Tdesign, D, d }
-   * Dönüş: [{ qm, dp, T, rho, mu, h, K, C, Re, L, idx }]
+   * ctx: { fluid (akışkan tanımı), p1 (tasarım, mutlak), Tdesign, D, d }
+   * Satır: { qm, dp, T?, rho?, p1? (mutlak, gaz) }
+   * Dönüş: [{ qm, dp, T, p1, rho, mu, eps, h, K, C, Re, L, idx }]
    */
   function prepare(rows, ctx) {
-    const E = 1 / Math.sqrt(1 - Math.pow(ctx.d / ctx.D, 4));
+    const beta = ctx.d / ctx.D;
+    const E = 1 / Math.sqrt(1 - Math.pow(beta, 4));
     const A2 = Math.PI * ctx.d * ctx.d / 4;
-    const geo = { D: ctx.D, d: ctx.d, E, A2, CGEO: E * A2 * SQRT2 };
+    const gas = ctx.fluid.type === 'gas';
+    const geo = { D: ctx.D, d: ctx.d, beta, E, A2, CGEO: E * A2 * SQRT2, gas, kappa: ctx.fluid.kappa || 1.4 };
     const pts = [];
     rows.forEach((r, idx) => {
       if (!r.on || !(r.qm > 0) || !(r.dp > 0)) return;
       const T = r.T > 0 ? r.T : ctx.Tdesign;
-      const pr = F.resolve(ctx.fluid, T, ctx.p1);
+      const p1 = r.p1 > 0 ? r.p1 : ctx.p1;
+      const pr = F.resolve(ctx.fluid, T, p1);
       const rho = r.rho > 0 ? r.rho : pr.rho;
       const mu = pr.mu;
-      const h = Math.sqrt(rho * r.dp);
+      const eps = epsOf(geo, r.dp, p1);
+      if (!isFinite(eps)) return;
+      const h = eps * Math.sqrt(rho * r.dp);
       const Re = 4 * r.qm / (Math.PI * mu * ctx.D);
-      pts.push({ qm: r.qm, dp: r.dp, T, rho, mu, h, K: r.qm / h, C: r.qm / (geo.CGEO * h), Re, L: Math.log10(Re), idx });
+      pts.push({ qm: r.qm, dp: r.dp, T, p1, rho, mu, eps, h, K: r.qm / h, C: r.qm / (geo.CGEO * h), Re, L: Math.log10(Re), idx });
     });
     return { pts, geo };
   }
@@ -92,7 +107,7 @@
   /* ---------------- Modeller ---------------- */
   // predict(params, {dp, rho, mu}, geo) → kütlesel debi [kg/s]
   function iterC(cfun, x, geo) {
-    const h = Math.sqrt(x.rho * x.dp);
+    const h = hOf(x);
     let C = cfun(null);
     let q = 0;
     for (let k = 0; k < 8; k++) {
@@ -106,47 +121,47 @@
   const MODELS = [
     {
       id: 'K', name: 'Tek katsayı', short: 'K', minPts: 1, visc: false,
-      formula: 'q_m = K·√(ρ·ΔP)',
+      formula: 'q_m = K·h,  h = ε·√(ρ·ΔP)',
       tex: 'q_m = K\\sqrt{\\rho\\,\\Delta P}',
       fit(p) {
         const K = p.reduce((s, x) => s + x.h / x.qm, 0) / p.reduce((s, x) => s + x.h * x.h / (x.qm * x.qm), 0);
         return { K };
       },
-      predict: (m, x) => m.K * Math.sqrt(x.rho * x.dp)
+      predict: (m, x) => m.K * hOf(x)
     },
     {
-      id: 'pow', name: 'Üslü', short: 'K·(ρΔP)ⁿ', minPts: 2, visc: false,
-      formula: 'q_m = K·(ρ·ΔP)^n',
-      tex: 'q_m = K\\,(\\rho\\,\\Delta P)^{n}',
+      id: 'pow', name: 'Üslü', short: 'K·(h²)ⁿ', minPts: 2, visc: false,
+      formula: 'q_m = K·(h²)^n,  h = ε·√(ρ·ΔP)',
+      tex: 'q_m = K\\,(h^2)^{n}',
       fit(p) {
-        const c = lsq(p.map(x => [1, Math.log(x.rho * x.dp)]), p.map(x => Math.log(x.qm)));
+        const c = lsq(p.map(x => [1, Math.log(x.h * x.h)]), p.map(x => Math.log(x.qm)));
         return c ? { K: Math.exp(c[0]), n: c[1] } : null;
       },
-      predict: (m, x) => m.K * Math.pow(x.rho * x.dp, m.n)
+      predict: (m, x) => { const h = hOf(x); return m.K * Math.pow(h * h, m.n); }
     },
     {
       id: 'poly', name: 'Polinom', short: 'a₀+a₁h+a₂h²', minPts: 3, visc: false,
-      formula: 'q_m = a₀ + a₁·h + a₂·h²,  h = √(ρ·ΔP)',
+      formula: 'q_m = a₀ + a₁·h + a₂·h²,  h = ε·√(ρ·ΔP)',
       tex: 'q_m = a_0 + a_1 h + a_2 h^2,\\quad h=\\sqrt{\\rho\\,\\Delta P}',
       fit(p) {
         const c = lsq(p.map(x => [1, x.h, x.h * x.h]), p.map(x => x.qm), p.map(x => 1 / (x.qm * x.qm)));
         return c ? { a: c } : null;
       },
-      predict: (m, x) => { const h = Math.sqrt(x.rho * x.dp); return Math.max(0, poly(m.a, h)); }
+      predict: (m, x) => Math.max(0, poly(m.a, hOf(x)))
     },
     {
       id: 'ktab', name: 'K düzeltme tablosu', short: 'K(ΔP) tablo', minPts: 2, visc: false,
-      formula: 'q_m = K(ΔP)·√(ρ·ΔP),  K tablodan doğrusal interpolasyon',
+      formula: 'q_m = K(ΔP)·h,  K tablodan doğrusal interpolasyon',
       tex: 'q_m = K(\\Delta P)\\,\\sqrt{\\rho\\,\\Delta P}',
       fit(p) {
         const tab = mergeTable(p.map(x => x.dp), p.map(x => x.K), 0.02);
         return tab.length >= 1 ? { tab } : null;
       },
-      predict: (m, x) => interp(m.tab, x.dp) * Math.sqrt(x.rho * x.dp)
+      predict: (m, x) => interp(m.tab, x.dp) * hOf(x)
     },
     {
       id: 'cre', name: 'C(Re) polinom', short: 'C(Re) polinom', minPts: 2, visc: true,
-      formula: 'q_m = C(Re)·E·A₂·√(2ρΔP),  C = c₀ + c₁·L + c₂·L²,  L = log₁₀(Re)',
+      formula: 'q_m = C(Re)·E·A₂·√2·h,  C = c₀ + c₁·L + c₂·L²,  L = log₁₀(Re)',
       tex: 'q_m = C(Re)\\,E\\,A_2\\sqrt{2\\rho\\,\\Delta P},\\quad C=c_0+c_1L+c_2L^2,\\ L=\\log_{10}Re',
       fit(p) {
         const distinct = mergeTable(p.map(x => x.L), p.map(x => x.C), 0, 0.01).length;
@@ -166,7 +181,7 @@
     },
     {
       id: 'crtab', name: 'C(Re) tablosu', short: 'C(Re) tablo', minPts: 2, visc: true,
-      formula: 'q_m = C(Re)·E·A₂·√(2ρΔP),  C tablodan log₁₀(Re)\'ye göre interpolasyon',
+      formula: 'q_m = C(Re)·E·A₂·√2·h,  C tablodan log₁₀(Re)\'ye göre interpolasyon',
       tex: 'q_m = C(\\log_{10}Re)\\,E\\,A_2\\sqrt{2\\rho\\,\\Delta P}',
       fit(p) {
         const tab = mergeTable(p.map(x => x.L), p.map(x => x.C), 0, 0.01);
@@ -275,10 +290,12 @@
   const byIdIn = list => id => list.find(r => r.model.id === id);
 
   /** Seçili model ile tahmin (canlı izleme / grafik) */
-  function predict(modelId, params, geo, dp, rho, mu) {
+  function predict(modelId, params, geo, dp, rho, mu, p1) {
     const m = byId(modelId);
     if (!m || !params || !(dp > 0)) return 0;
-    return m.predict(params, { dp, rho, mu }, geo);
+    const eps = epsOf(geo, dp, p1);
+    if (!isFinite(eps)) return 0;
+    return m.predict(params, { dp, rho, mu, eps }, geo);
   }
 
   /* ---------------- PLC kod üretimi ---------------- */
@@ -309,6 +326,9 @@
     const k = DP_TO_PA[g.dpUnit] || 100;
     const lowCutPa = Math.pow(g.lowCutPct / 100, 2) * g.ranges.dpMax;
     const name = g.name || 'FB_VenturiFlow';
+    const gas = !!g.geo.gas;
+    const idealGas = gas && g.gasM > 0;
+    const kp = DP_TO_PA[g.p1Unit] || 1e5;
     const lines = [];
     const L = s => lines.push(s);
     const tab = (t, nx, ny) => {
@@ -336,19 +356,20 @@
     L(`   VenturiFlow Master — ${tc ? 'Beckhoff TwinCAT 3' : 'Genel IEC 61131-3 ST'} — otomatik üretildi`);
     L(`   Tarih        : ${g.meta.date}`);
     L(`   Model        : ${m.name} — ${m.formula}`);
-    L(`   Kalibrasyon  : ${g.meta.n} nokta, akışkan: ${g.meta.fluid}`);
+    L(`   Kalibrasyon  : ${g.meta.n} nokta, akışkan: ${g.meta.fluid} (${gas ? 'GAZ — ε ve ' + (idealGas ? 'ideal gaz yoğunluğu' : 'yoğunluk') + ' dahil' : 'sıvı'})`);
     L(`   Hata (uydurma): maks ±%${g.meta.fit.maxAbs.toFixed(3)}, RMS %${g.meta.fit.rms.toFixed(3)}`);
     if (g.meta.loo) L(`   Hata (LOO)   : maks ±%${g.meta.loo.maxAbs.toFixed(3)}, RMS %${g.meta.loo.rms.toFixed(3)}`);
     L(`   Geçerli aralık: ΔP ${(g.ranges.dpMin / k).toPrecision(4)} … ${(g.ranges.dpMax / k).toPrecision(4)} ${g.dpUnit}, T ${(g.ranges.Tmin - 273.15).toFixed(1)} … ${(g.ranges.Tmax - 273.15).toFixed(1)} °C`);
     L(`   ρ(T) yaklaşımı maks hata %${g.pf.rhoErr.toFixed(3)}, μ(T) maks hata %${g.pf.muErr.toFixed(2)}`);
     L('   Kullanım:');
-    L(`     fbVenturi(fDp := <ΔP [${g.dpUnit}]>, fTemp := <T [°C]>, fDensityIn := <Coriolis ρ veya 0>);`);
+    L(`     fbVenturi(fDp := <ΔP [${g.dpUnit}]>, fTemp := <T [°C]>, ${gas ? `fP1 := <P1 mutlak [${g.p1Unit}]>, ` : ''}fDensityIn := <Coriolis ρ veya 0>);`);
     L('     fbVenturi.fMassFlow  → [kg/h], fbVenturi.fVolFlow → [m3/h]');
     L('   ===================================================================== *)');
     L('VAR_INPUT');
     L(`    fDp        : ${R};      (* Fark basınç [${g.dpUnit}] *)`);
     L(`    fTemp      : ${R};      (* Akışkan sıcaklığı [°C] *)`);
-    L(`    fDensityIn : ${R};      (* Ölçülen yoğunluk [kg/m3]; 0 ise ρ(T) kullanılır *)`);
+    if (gas) L(`    fP1        : ${R};      (* Giriş basıncı, MUTLAK [${g.p1Unit}] *)`);
+    L(`    fDensityIn : ${R};      (* Ölçülen yoğunluk [kg/m3]; 0 ise ${idealGas ? 'ρ = p1·M/(Z·R·T)' : 'ρ(T)'} kullanılır *)`);
     L('END_VAR');
     L('VAR_OUTPUT');
     L(`    fMassFlow   : ${R};     (* Kütlesel debi [kg/h] *)`);
@@ -371,6 +392,16 @@
     L(`    MU_0       : ${R} := ${lit(g.pf.mu[0])};   (* ln μ = MU_0 + MU_1·x + MU_2·x², x = 1000/T[K] *)`);
     L(`    MU_1       : ${R} := ${lit(g.pf.mu[1])};`);
     L(`    MU_2       : ${R} := ${lit(g.pf.mu[2])};`);
+    if (gas) {
+      L(`    P1_TO_PA   : ${R} := ${lit(kp)};       (* ${g.p1Unit} → Pa *)`);
+      L(`    KAPPA      : ${R} := ${lit(g.geo.kappa)};   (* izentropik üs *)`);
+      L(`    BETA4      : ${R} := ${lit(Math.pow(g.geo.beta, 4))};   (* β⁴ *)`);
+      if (idealGas) {
+        L(`    M_KG       : ${R} := ${lit(g.gasM / 1000)};   (* molar kütle [kg/mol] *)`);
+        L(`    Z_F        : ${R} := ${lit(g.gasZ || 1)};   (* sıkıştırılabilirlik *)`);
+        L(`    R_GAS      : ${R} := 8.314462618;`);
+      }
+    }
     L(`    LOWCUT_PA  : ${R} := ${lit(lowCutPa)};   (* %${g.lowCutPct} maks. debi *)`);
     L(`    DP_MIN_PA  : ${R} := ${lit(g.ranges.dpMin)};`);
     L(`    DP_MAX_PA  : ${R} := ${lit(g.ranges.dpMax)};`);
@@ -389,6 +420,7 @@
     if (m.id === 'ktab') tab(p.tab, 'aDpTab', 'aKTab').forEach(L);
     if (m.id === 'crtab') tab(p.tab, 'aLTab', 'aCTab').forEach(L);
     L(`    fDpPa, fTK, fH, fQm, fC, fL, fX : ${R};`);
+    if (gas) L(`    fP1Pa, fTau, fT2k, fEps : ${R};`);
     L('    i, k : INT;');
     L('END_VAR');
     const declEnd = lines.length;
@@ -396,27 +428,38 @@
     L('(* ---------- Akışkan özellikleri ---------- *)');
     L('fDpPa := fDp * DP_TO_PA;');
     L('fTK := fTemp + 273.15;');
+    if (gas) L('fP1Pa := fP1 * P1_TO_PA;');
     L('IF fDensityIn > 0.0 THEN');
     L('    fDensity := fDensityIn;');
     L('ELSE');
-    L('    fDensity := RHO_0 + RHO_1 * fTemp + RHO_2 * fTemp * fTemp;');
+    L(idealGas ? '    fDensity := fP1Pa * M_KG / (Z_F * R_GAS * fTK);   (* ideal gaz *)' : '    fDensity := RHO_0 + RHO_1 * fTemp + RHO_2 * fTemp * fTemp;');
     L('END_IF');
     L('fX := 1000.0 / fTK;');
     L('fViscosity := EXP(MU_0 + MU_1 * fX + MU_2 * fX * fX);');
     L('bOutOfRange := (fDpPa < DP_MIN_PA) OR (fDpPa > DP_MAX_PA) OR (fTemp < T_MIN_C) OR (fTemp > T_MAX_C);');
     L('bLowFlowCut := fDpPa < LOWCUT_PA;');
     L('');
-    L('IF bLowFlowCut OR (fDensity <= 0.0) THEN');
+    L(gas ? 'IF bLowFlowCut OR (fDensity <= 0.0) OR (fDpPa >= fP1Pa) THEN' : 'IF bLowFlowCut OR (fDensity <= 0.0) THEN');
     L('    fQm := 0.0;');
     L('    fRe := 0.0;');
     L('    fCd := 0.0;');
     L('ELSE');
     const body = [];
     const B = s => body.push(s);
-    B('fH := SQRT(fDensity * fDpPa);');
+    if (gas) {
+      B('(* Genleşme faktörü ε (ISO 5167-4 Denk. 2), τ = p2/p1 *)');
+      B('fTau := (fP1Pa - fDpPa) / fP1Pa;');
+      B('IF fTau >= 1.0 THEN');
+      B('    fEps := 1.0;');
+      B('ELSE');
+      B('    fT2k := EXPT(fTau, 2.0 / KAPPA);');
+      B('    fEps := SQRT((KAPPA * fT2k / (KAPPA - 1.0)) * ((1.0 - BETA4) / (1.0 - BETA4 * fT2k)) * ((1.0 - EXPT(fTau, (KAPPA - 1.0) / KAPPA)) / (1.0 - fTau)));');
+      B('END_IF');
+      B('fH := fEps * SQRT(fDensity * fDpPa);');
+    } else B('fH := SQRT(fDensity * fDpPa);');
     B(`(* ---------- Model: ${m.name} ---------- *)`);
     if (m.id === 'K') B('fQm := K_CAL * fH;');
-    if (m.id === 'pow') B('fQm := K_CAL * EXPT(fDensity * fDpPa, N_EXP);');
+    if (m.id === 'pow') B('fQm := K_CAL * EXPT(fH * fH, N_EXP);');
     if (m.id === 'poly') { B('fQm := A_0 + A_1 * fH + A_2 * fH * fH;'); B('IF fQm < 0.0 THEN fQm := 0.0; END_IF'); }
     if (m.id === 'ktab') { interpCode('fDpPa', 'aDpTab', 'aKTab', p.tab.length, 'fC').forEach(B); B('fQm := fC * fH;   (* fC burada K katsayısıdır *)'); }
     if (m.id === 'cre' || m.id === 'crtab') {
@@ -480,6 +523,10 @@
     out.push('');
     out.push('Geometri:');
     out.push(`  D = ${lit(g.geo.D)} m, d = ${lit(g.geo.d)} m, E = ${lit(g.geo.E)}, A2 = ${lit(g.geo.A2)} m2, C_GEO = E·A2·√2 = ${lit(g.geo.CGEO)}`);
+    if (g.geo.gas) {
+      out.push(`GAZ: h = ε·√(ρ·ΔP), ε = √[(κτ^(2/κ)/(κ−1))·((1−β⁴)/(1−β⁴τ^(2/κ)))·((1−τ^((κ−1)/κ))/(1−τ))], τ = (p1−ΔP)/p1 (p1 mutlak)`);
+      out.push(`  κ = ${lit(g.geo.kappa)}, β⁴ = ${lit(Math.pow(g.geo.beta, 4))}` + (g.gasM > 0 ? `, ρ = p1·M/(Z·R·T): M = ${lit(g.gasM / 1000)} kg/mol, Z = ${lit(g.gasZ || 1)}, R = 8.314462618` : ''));
+    } else out.push('SIVI: h = √(ρ·ΔP)');
     out.push('Akışkan özellikleri:');
     out.push(`  ρ(t)  = ${lit(g.pf.rho[0])} + ${lit(g.pf.rho[1])}·t + ${lit(g.pf.rho[2])}·t²     (maks hata %${g.pf.rhoErr.toFixed(3)})`);
     out.push(`  ln μ  = ${lit(g.pf.mu[0])} + ${lit(g.pf.mu[1])}·x + ${lit(g.pf.mu[2])}·x²,  x = 1000/T   (maks hata %${g.pf.muErr.toFixed(2)})`);

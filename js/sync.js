@@ -119,7 +119,7 @@
   }
 
   /* ---------------- Durum ---------------- */
-  let app = null;            // { getSharedJson, applyShared, toast, modal }
+  let app = null;            // { getSharedJson, getSharedState, applyShared, isBlankVenturi, toast, modal }
   let status = { kind: 'off', text: 'Ortak kayıt kapalı' };
   let pushTimer = null, pollTimer = null, chain = Promise.resolve();
   let conflictOpen = false, lastPullAt = 0, lastError = '';
@@ -177,18 +177,119 @@
     idleStatus();
   }
 
-  /* ---------------- Eşitleme ---------------- */
-  function apply(remote, silent, mergeLocal) {
-    const added = app.applyShared(remote.data.state || {}, !!mergeLocal) || 0;
-    // Yerel venturiler eklendiyse içerik ortak dosyadan farklıdır → bir sonraki adımda yazılır
-    setMeta({ sha: remote.sha, hash: added ? 'merged' : hash(app.getSharedJson()), savedAt: remote.data.savedAt, savedBy: remote.data.savedBy });
-    if (!silent) app.toast(`Ortak sürüm yüklendi — ${remote.data.savedBy || '?'}, ${new Date(remote.data.savedAt).toLocaleString('tr-TR')}` + (added ? ` · bu bilgisayardaki ${added} venturi ortak listeye eklendi` : ''), 'ok');
-    if (added && canWrite()) schedulePush(1500);
+  /* ---------------- Eşitleme (venturi bazında üç yollu birleştirme) ----------------
+   * meta.base: son eşitleme anındaki her venturinin / akışkanın özeti.
+   * Ortak dosya değiştiğinde öğe öğe karşılaştırılır: yalnız bir tarafta değişen alınır,
+   * yeni eklenenler korunur, silinenler silinir; yalnızca AYNI öğe iki tarafta da
+   * değiştiyse kullanıcıya sorulur. */
+  const LISTS = [['venturis', 'v', 'Venturi'], ['fluids', 'f', 'Akışkan']];
+  const itemHash = x => hash(JSON.stringify(x));
+  function baseOf(sharedState) {
+    const b = {};
+    LISTS.forEach(([k, s]) => { b[s] = {}; (sharedState[k] || []).forEach(x => { b[s][x.id] = itemHash(x); }); });
+    return b;
+  }
+
+  function apply(remote, silent) {
+    app.applyShared(remote.data.state || {}, false);
+    setMeta({ sha: remote.sha, hash: hash(app.getSharedJson()), base: baseOf(remote.data.state || {}), savedAt: remote.data.savedAt, savedBy: remote.data.savedBy });
+    if (!silent) app.toast(`Ortak sürüm yüklendi — ${remote.data.savedBy || '?'}, ${new Date(remote.data.savedAt).toLocaleString('tr-TR')}`, 'ok');
+  }
+
+  /** local, remote: paylaşılan durum nesneleri; base: meta.base; first: ilk eşitleme */
+  function merge3(local, remote, base, first) {
+    const out = JSON.parse(JSON.stringify(remote));
+    const conflicts = [];
+    let localWins = 0;
+    LISTS.forEach(([key, s, label]) => {
+      const b = (base && base[s]) || {};
+      let L = local[key] || [];
+      if (first && key === 'venturis') L = L.filter(v => !app.isBlankVenturi(v));   // dokunulmamış varsayılan venturi taşınmaz
+      const R = remote[key] || [];
+      const lm = new Map(L.map(x => [x.id, x])), rm = new Map(R.map(x => [x.id, x]));
+      const ids = R.map(x => x.id).concat(L.map(x => x.id).filter(id => !rm.has(id)));
+      const res = [];
+      ids.forEach(id => {
+        const l = lm.get(id), r = rm.get(id), bh = b[id];
+        if (l && r) {
+          const hl = itemHash(l), hr = itemHash(r);
+          if (hl === hr) return res.push(r);
+          const lc = hl !== bh, rc = hr !== bh;
+          if (lc && !rc) { localWins++; return res.push(l); }
+          if (!lc && rc) return res.push(r);
+          conflicts.push({ key, label, id, l, r, pos: res.length });
+          return res.push(r);                       // çözüm sonrası değiştirilir
+        }
+        if (l && !r) {                               // yalnız bu bilgisayarda
+          if (bh === undefined || itemHash(l) !== bh) { localWins++; res.push(l); }   // yeni ya da burada değişmiş → koru
+          return;                                    // ortakta silinmiş ve burada değişmemiş → sil
+        }
+        if (!l && r) {                               // yalnız ortakta
+          if (bh === undefined || itemHash(r) !== bh) res.push(r);   // yeni ya da orada değişmiş → al
+          else if (first) res.push(r);               // ilk eşitleme: hepsini al
+        }
+      });
+      out[key] = res;
+    });
+    return { merged: out, conflicts, localWins };
+  }
+
+  /** Gerçek çakışmalar için kullanıcıya sorar → çözülmüş durum */
+  function resolve(merged, conflicts, remote) {
+    if (!conflicts.length) return Promise.resolve(merged);
+    conflictOpen = true;
+    setStatus('conflict', 'Ortak: çakışma');
+    return new Promise(done => {
+      const name = x => VF.CSV.esc(x.name || x.id);
+      const when = x => x.updated ? new Date(x.updated).toLocaleString('tr-TR') : '—';
+      const body = document.createElement('div');
+      body.innerHTML = `<p>Aşağıdaki öğeler hem bu bilgisayarda hem de ortak kayıtta (<b>${VF.CSV.esc(remote.data.savedBy || '?')}</b>) değiştirilmiş. Diğer tüm değişiklikler otomatik birleştirildi.</p>
+        <table class="grid"><thead><tr><th>Tür</th><th>Bu bilgisayar</th><th>Ortak kayıt</th><th>Seçim</th></tr></thead><tbody>
+        ${conflicts.map((c, i) => `<tr><td>${c.label}</td><td>${name(c.l)}<br><span class="note">${when(c.l)}</span></td><td>${name(c.r)}<br><span class="note">${when(c.r)}</span></td>
+          <td><select data-c="${i}"><option value="both">İkisini de tut</option><option value="mine">Benimki</option><option value="theirs">Ortaktaki</option></select></td></tr>`).join('')}
+        </tbody></table><p class="note">"İkisini de tut": ortaktaki aynen kalır, sizinki "(bu bilgisayar)" ekiyle ayrı bir kayıt olarak eklenir.</p>`;
+      const finish = () => {
+        conflictOpen = false;
+        const picks = [...body.querySelectorAll('[data-c]')].map(el => el.value);
+        conflicts.forEach((c, i) => {
+          const list = merged[c.key];
+          const idx = list.findIndex(x => x.id === c.id);
+          if (picks[i] === 'mine') list[idx] = c.l;
+          if (picks[i] === 'both') {
+            const copy = JSON.parse(JSON.stringify(c.l));
+            copy.id = (c.key === 'venturis' ? 'v' : 'f') + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) + i;
+            copy.name = (copy.name || '') + ' (bu bilgisayar)';
+            list.splice(idx + 1, 0, copy);
+          }
+        });
+        done(merged);
+      };
+      app.modal({ title: 'Ortak kayıt: aynı öğe iki yerde değişti', body, buttons: [{ label: 'Uygula', primary: true, action: finish }] });
+      // pencere ✕/Esc ile kapanırsa varsayılan: ikisini de tut
+      const obs = new MutationObserver(() => { if (!document.body.contains(body)) { obs.disconnect(); if (conflictOpen) finish(); } });
+      obs.observe(document.body, { childList: true });
+    });
+  }
+
+  /** Ortak dosya değişti ve burada da yazılmamış değişiklik var → birleştir */
+  async function mergeWith(remote, first) {
+    const m = meta();
+    const local = app.getSharedState();
+    const { merged, conflicts, localWins } = merge3(local, remote.data.state || {}, m.base, first);
+    const final = await resolve(merged, conflicts, remote);
+    const same = JSON.stringify(final) === JSON.stringify(remote.data.state || {});
+    app.applyShared(final, false);
+    // Ortak dosyadan farklıysa "kirli" kalır → yazılır (yazabiliyorsa)
+    setMeta({ sha: remote.sha, base: baseOf(remote.data.state || {}), hash: same ? hash(app.getSharedJson()) : 'merged', savedAt: remote.data.savedAt, savedBy: remote.data.savedBy });
+    const n = (conflicts.length ? `${conflicts.length} çakışma çözüldü · ` : '') + (localWins ? `bu bilgisayardan ${localWins} değişiklik korundu` : 'ortak değişiklikler alındı');
+    app.toast(`Ortak kayıt birleştirildi (${remote.data.savedBy || '?'}): ${n}`, 'ok');
+    if (canWrite() && dirty()) schedulePush(800);
   }
 
   function pull() {
     if (!enabled()) return Promise.resolve();
     return queue(async () => {
+      if (conflictOpen) return;
       lastPullAt = Date.now();
       const remote = await readRemote();
       lastError = '';
@@ -202,37 +303,34 @@
         if (dirty() && canWrite()) schedulePush(500);
         return idleStatus();
       }
-      const remoteHash = hash(JSON.stringify(remote.data.state || {}));
-      if (!m.sha && !m.hash) return apply(remote, false, true), idleStatus(); // bu bilgisayarda ilk eşitleme: yerel venturiler korunur
-      if (remoteHash === hash(app.getSharedJson()) || !dirty()) {
-        apply(remote, remoteHash === hash(app.getSharedJson()));
-        return idleStatus();
-      }
-      conflict(remote);
+      const first = !m.sha && !m.hash;
+      if (!first && !dirty()) { apply(remote); return idleStatus(); }   // burada değişiklik yok → doğrudan al
+      await mergeWith(remote, first);
+      idleStatus();
     });
   }
 
-  async function doPush(force) {
+  async function doPush(force, depth) {
     if (!canWrite()) return idleStatus();
-    const json = app.getSharedJson();
+    const shared = app.getSharedState();
+    const json = JSON.stringify(shared);
     const h = hash(json);
     if (!force && h === meta().hash) return idleStatus();
     setStatus('saving', 'Ortak: kaydediliyor…');
-    const data = { app: 'VenturiFlow Master', version: 1, savedAt: new Date().toISOString(), savedBy: deviceName(), state: JSON.parse(json) };
+    const data = { app: 'VenturiFlow Master', version: 2, savedAt: new Date().toISOString(), savedBy: deviceName(), state: shared };
     try {
       const sha = await writeRemote(data, meta().sha);
       lastError = '';
-      setMeta({ sha, hash: h, savedAt: data.savedAt, savedBy: data.savedBy });
+      setMeta({ sha, hash: h, base: baseOf(shared), savedAt: data.savedAt, savedBy: data.savedBy });
       idleStatus();
     } catch (e) {
-      if (e.kind !== 'conflict') throw e;
+      if (e.kind !== 'conflict' || (depth || 0) > 2) throw e;
+      // Araya başka bir kayıt girdi → birleştir ve tekrar dene
       const remote = await readRemote();
-      if (!remote) { setMeta({ ...meta(), sha: undefined }); return doPush(true); }
-      if (hash(JSON.stringify(remote.data.state || {})) === h) {
-        setMeta({ sha: remote.sha, hash: h, savedAt: remote.data.savedAt, savedBy: remote.data.savedBy });
-        return idleStatus();
-      }
-      conflict(remote);
+      if (!remote) { setMeta({ ...meta(), sha: undefined }); return doPush(true, (depth || 0) + 1); }
+      await mergeWith(remote, false);
+      clearTimeout(pushTimer);
+      return doPush(true, (depth || 0) + 1);
     }
   }
 
@@ -241,27 +339,6 @@
   function schedulePush(ms) {
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => push(false), ms === undefined ? PUSH_DELAY : ms);
-  }
-
-  function conflict(remote) {
-    setStatus('conflict', 'Ortak: çakışma');
-    if (conflictOpen) return;
-    conflictOpen = true;
-    const who = `<b>${VF.CSV.esc(remote.data.savedBy || '?')}</b> · ${new Date(remote.data.savedAt).toLocaleString('tr-TR')}`;
-    app.modal({
-      title: 'Ortak kayıt başka bir bilgisayardan güncellendi',
-      body: `<p>Ortak dosya siz çalışırken değişti (${who}). Bu bilgisayarda henüz ortak kayda yazılmamış değişiklikler de var.</p>
-        <ul><li><b>Ortak sürümü yükle:</b> Diğer bilgisayarın kaydı açılır, buradaki değişiklikler kaybolur.</li>
-        <li><b>Benimkini koru:</b> ${canWrite() ? 'Buradaki hâl ortak kayda yazılır (diğerinin değişikliği commit geçmişinde kalır).' : 'Buradaki hâl sadece bu bilgisayarda kalır.'}</li></ul>`,
-      buttons: [
-        { label: 'Ortak sürümü yükle', action: () => { conflictOpen = false; apply(remote); idleStatus(); } },
-        { label: 'Benimkini koru', primary: true, action: () => {
-          conflictOpen = false;
-          setMeta({ ...meta(), sha: remote.sha });
-          if (canWrite()) push(true); else idleStatus();
-        } }
-      ]
-    });
   }
 
   function schedulePoll() {

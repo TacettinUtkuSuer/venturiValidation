@@ -46,10 +46,10 @@
     return r ? { r, geo: analysis().geo } : null;
   }
 
-  function predict(dp, rho, mu) {
+  function predict(dp, rho, mu, p1) {
     const s = active();
     if (!s) return null;
-    return C.predict(s.r.model.id, s.r.params, s.geo, dp, rho, mu);
+    return C.predict(s.r.model.id, s.r.params, s.geo, dp, rho, mu, p1 > 0 ? p1 : A.context().inp.p1);
   }
 
   /** Kalibre debi belirsizliği tahmini (%95): referans + model doğrulama saçılması */
@@ -65,14 +65,17 @@
     { k: 'qm', dim: 'flow', uk: 'q', name: 'Referans debi', req: true },
     { k: 'dp', dim: 'pressure', uk: 'dp', name: 'ΔP', req: true },
     { k: 'T', dim: 'temperature', uk: 'T', name: 'Sıcaklık' },
-    { k: 'rho', dim: 'density', uk: 'rho', name: 'Yoğunluk (ops.)' }
+    { k: 'rho', dim: 'density', uk: 'rho', name: 'Yoğunluk (ops.)' },
+    { k: 'p1', dim: 'pressure', uk: 'p1', name: 'P1 mutlak (gaz)', gas: true }
   ];
+  const isGas = () => A.activeFluid().type === 'gas';
+  const cols = () => COLS.filter(c => !c.gas || isGas());
 
   // Satır için yoğunluk bağlamı (hacimsel debi birimleri için)
   function rowRho(r) {
     if (r.rho > 0) return r.rho;
     const c = A.context();
-    return F.resolve(A.activeFluid(), r.T > 0 ? r.T : c.inp.T, c.inp.p1).rho;
+    return F.resolve(A.activeFluid(), r.T > 0 ? r.T : c.inp.T, r.p1 > 0 ? r.p1 : c.inp.p1).rho;
   }
 
   function cellVal(r, col) {
@@ -84,13 +87,13 @@
 
   function renderTable() {
     const un = cs().units;
-    const head = COLS.map(col => `<th>${col.name}${col.req ? ' <span class="req">*</span>' : ''}<br>
+    const head = cols().map(col => `<th>${col.name}${col.req ? ' <span class="req">*</span>' : ''}<br>
       <select data-cu="${col.uk}" data-dim="${col.dim}">${U.units(col.dim).map(u => `<option value="${u}" ${un[col.uk] === u ? 'selected' : ''}>${U.label(col.dim, u)}</option>`).join('')}</select></th>`).join('');
     $('calTable').innerHTML = `<thead><tr><th title="Hesaba kat">✓</th><th>#</th>${head}<th>Kaynak</th><th></th></tr></thead>
       <tbody>${cs().rows.map((r, i) => `<tr class="${r.on ? '' : 'off'}" data-row="${i}">
         <td><input type="checkbox" data-on="${i}" ${r.on ? 'checked' : ''}></td>
         <td class="n">${i + 1}</td>
-        ${COLS.map(col => `<td><input type="number" step="any" data-r="${i}" data-k="${col.k}" value="${cellVal(r, col)}" placeholder="${col.k === 'T' ? 'tasarım T' : col.k === 'rho' ? 'ρ(T)' : ''}"></td>`).join('')}
+        ${cols().map(col => `<td><input type="number" step="any" data-r="${i}" data-k="${col.k}" value="${cellVal(r, col)}" placeholder="${col.k === 'T' ? 'tasarım T' : col.k === 'rho' ? (isGas() ? 'pM/ZRT' : 'ρ(T)') : col.k === 'p1' ? 'tasarım p₁' : ''}"></td>`).join('')}
         <td class="src">${esc(r.src || 'elle')}</td>
         <td><button class="btn sm icon danger" data-del="${i}" title="Satırı sil">✕</button></td></tr>`).join('')}
       </tbody>`;
@@ -220,7 +223,13 @@
     else if (a.rep.level === 'warn') warn.push(['warn', `Tekrarlanabilirlik orta (±%${a.rep.worst.toFixed(2)}). Ölçüm ortalama süresini artırın.`]);
     else if (a.rep.level === 'none') warn.push(['note', 'Tekrarlanabilirlik için aynı debide en az iki ölçüm (artan + azalan yönde) alın.']);
     if (a.viscSensitive && a.testTspan < 10) warn.push(['warn', `İşletmede viskozite ${a.pf.muRatio.toFixed(1)} kat değişiyor ama testler dar bir sıcaklık aralığında (${a.testTspan.toFixed(1)} K). C(Re) modelleri Reynolds üzerinden kompanze eder; yine de farklı sıcaklıklarda da nokta almanız doğrulamayı güçlendirir.`]);
-    if (A.activeFluid().type === 'gas') warn.push(['bad', 'Kalibrasyon modülü sıvılar içindir; gazlarda genleşme faktörü (ε) ve basınca bağlı yoğunluk modele dahil değildir.']);
+    if (isGas()) {
+      const f = A.activeFluid();
+      if (!(f.M > 0) && !a.pts.some(p => cs().rows[p.idx] && cs().rows[p.idx].rho > 0)) warn.push(['bad', 'Gaz için molar kütle (M) tanımlı değil ve yoğunluk ölçümü yok: yoğunluk sabit kabul ediliyor. Akışkan sekmesinde M (ve Z) girin ya da yoğunluk sütununu doldurun.']);
+      if (a.pts.some(p => cs().rows[p.idx] && !(cs().rows[p.idx].p1 > 0))) warn.push(['warn', 'Bazı noktalarda P1 (mutlak) boş; tasarım p₁ kullanılıyor. Gazda ε ve yoğunluk P1\'e bağlıdır — mümkünse her noktada P1 girin.']);
+      const tauMin = Math.min(...a.pts.map(p => (p.p1 - p.dp) / p.p1));
+      if (tauMin < 0.75) warn.push(['warn', `En düşük basınç oranı τ = ${tauMin.toFixed(3)} < 0,75 (ISO 5167-4 sınırı dışında).`]);
+    }
     if (!a.pf.hasTable) warn.push(['bad', 'Akışkanın sıcaklığa bağlı özellik tablosu yok: ρ(T) ve μ(T) sabit kabul ediliyor, sıcaklık kompanzasyonu çalışmaz. Akışkan sekmesinden tablo yükleyin (su için hazır).']);
     if (a.pf.muErr > 3) warn.push(['warn', `μ(T) PLC yaklaşımının hatası %${a.pf.muErr.toFixed(1)}; işletme sıcaklık aralığını daraltmak doğruluğu artırır.`]);
     el.innerHTML = `<table class="grid kv">
@@ -240,7 +249,8 @@
     const pts = a.pts;
     return {
       modelId: sel.model.id, params: sel.params, geo: a.geo, pf: a.pf,
-      dpUnit: cs().plc.dpUnit, lowCutPct: cs().plc.lowCut, name: cs().plc.name || 'FB_VenturiFlow',
+      dpUnit: cs().plc.dpUnit, p1Unit: cs().plc.p1Unit || 'bar', lowCutPct: cs().plc.lowCut, name: cs().plc.name || 'FB_VenturiFlow',
+      gasM: isGas() ? A.activeFluid().M : 0, gasZ: isGas() ? A.activeFluid().Z : 1,
       ranges: { dpMin: Math.min(...pts.map(p => p.dp)), dpMax: Math.max(...pts.map(p => p.dp)), Tmin: cs().TminK, Tmax: cs().TmaxK },
       meta: { date: new Date().toLocaleString('tr-TR'), n: pts.length, fit: sel.fit, loo: sel.loo, fluid: A.activeFluid().name }
     };
@@ -280,12 +290,13 @@ VAR
     fbVenturi : ${g.name};
     fDp_${g.dpUnit}  : LREAL;   (* DP transmitterden, olceklenmis *)
     fTemp_C   : LREAL;   (* Sicaklik transmitterden *)
-    fRho      : LREAL;   (* Coriolis yogunlugu; yoksa 0 *)
+    fRho      : LREAL;   (* Coriolis yogunlugu; yoksa 0 *)${g.geo.gas ? `
+    fP1_${g.p1Unit}abs : LREAL;   (* Giris basinci, MUTLAK *)` : ''}
     fFlow_kgh : LREAL;
 END_VAR
 
 (* Kod *)
-fbVenturi(fDp := fDp_${g.dpUnit}, fTemp := fTemp_C, fDensityIn := fRho);
+fbVenturi(fDp := fDp_${g.dpUnit}, fTemp := fTemp_C, ${g.geo.gas ? `fP1 := fP1_${g.p1Unit}abs, ` : ''}fDensityIn := fRho);
 fFlow_kgh := fbVenturi.fMassFlow;
 IF fbVenturi.bOutOfRange THEN
     ; (* Kalibrasyon araligi disi: alarm / uyari *)
@@ -364,7 +375,7 @@ END_IF`;
       onDone: res => {
         if (res.mode !== 'measure') return A.toast('Kalibrasyon için "Ölçüm Verisi" modunu seçin.', 'err');
         res.rows.forEach(r => {
-          const row = { dp: r.dp, T: r.T > 0 ? r.T : null, rho: r.rho > 0 ? r.rho : null, src: 'CSV', on: true };
+          const row = { dp: r.dp, T: r.T > 0 ? r.T : null, rho: r.rho > 0 ? r.rho : null, p1: r.p1 > 0 ? r.p1 : null, src: 'CSV', on: true };
           row.qm = U.toSI('flow', r.qv, r.qu, { rho: rowRho(row) });
           cs().rows.push(row);
         });
@@ -378,19 +389,28 @@ END_IF`;
   function sample() {
     const c = A.context();
     const fl = A.activeFluid();
-    if (fl.type !== 'liquid') return A.toast('Örnek veri sıvı akışkanlar içindir.', 'err');
-    const D = c.inp.D, d = c.inp.d;
-    const E = 1 / Math.sqrt(1 - Math.pow(d / D, 4)), A2 = Math.PI * d * d / 4;
+    const gas = fl.type === 'gas';
+    const D = c.inp.D, d = c.inp.d, beta = d / D;
+    const E = 1 / Math.sqrt(1 - Math.pow(beta, 4)), A2 = Math.PI * d * d / 4;
     const qMax = c.qMax;
     let seed = 11; const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647;
     const rows = [];
     for (const tC of [15, 45, 75]) for (const f of [0.12, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0]) {
-      const T = tC + 273.15, pr = F.resolve(fl, T, c.inp.p1);
+      const T = tC + 273.15;
+      const p1 = c.inp.p1 * (gas ? 1 + (rnd() - 0.5) * 0.1 : 1);
+      const pr = F.resolve(fl, T, p1);
       const qm = qMax * f;
       const Re = 4 * qm / (Math.PI * pr.mu * D);
       const Ct = 0.957 + 0.011 * Math.log10(Re / 1e5) - 0.004 * Math.exp(-f * 6);
-      const dp = Math.pow(qm / (Ct * E * A2), 2) / (2 * pr.rho) * (1 + (rnd() - 0.5) * 0.004);
-      rows.push({ qm: qm * (1 + (rnd() - 0.5) * 0.001), dp, T: T + (rnd() - 0.5) * 0.4, rho: null, src: 'örnek', on: true });
+      // gazda ε, ΔP'ye bağlı → sabit nokta iterasyonu
+      let dp = Math.pow(qm / (Ct * E * A2), 2) / (2 * pr.rho);
+      for (let k = 0; gas && k < 30; k++) {
+        const eps = VF.Physics.expansibility(beta, (p1 - dp) / p1, fl.kappa || 1.4);
+        dp = Math.pow(qm / (Ct * eps * E * A2), 2) / (2 * pr.rho);
+      }
+      if (!(dp < p1 * 0.5)) continue;
+      dp *= 1 + (rnd() - 0.5) * 0.004;
+      rows.push({ qm: qm * (1 + (rnd() - 0.5) * 0.001), dp, T: T + (rnd() - 0.5) * 0.4, rho: null, p1: gas ? p1 : null, src: 'örnek', on: true });
     }
     cs().rows = cs().rows.concat(rows);
     renderTable(); changed(false);
@@ -399,7 +419,7 @@ END_IF`;
 
   /** Canlı panelden anlık (ortalama) değeri test noktası olarak ekler */
   function addFromLive(v) {
-    cs().rows.push({ qm: v.qm, dp: v.dp, T: v.T || null, rho: v.rho || null, src: 'canlı', on: true });
+    cs().rows.push({ qm: v.qm, dp: v.dp, T: v.T || null, rho: v.rho || null, p1: v.p1 || null, src: v.src || 'canlı', on: true });
     if (!$('viewCalib').hidden) renderTable();
     changed(false);
     $('calCount') && ($('calCount').textContent = `${cs().rows.filter(r => r.on).length} / ${cs().rows.length} nokta`);
@@ -411,6 +431,8 @@ END_IF`;
     renderTable();
     $('plcName').value = cs().plc.name;
     $('plcDpUnit').value = cs().plc.dpUnit;
+    $('plcP1Unit').value = cs().plc.p1Unit || 'bar';
+    $('plcP1Wrap').hidden = !isGas();
     $('plcLowCut').value = cs().plc.lowCut;
     $('calApply').checked = !!cs().apply;
     renderResults();
@@ -419,6 +441,7 @@ END_IF`;
   function init(app) {
     A = app;
     $('plcDpUnit').innerHTML = Object.keys(C.DP_TO_PA).map(u => `<option value="${u}">${U.label('pressure', u)}</option>`).join('');
+    $('plcP1Unit').innerHTML = $('plcDpUnit').innerHTML;
     bindTable();
     $('calAdd').onclick = () => addRow();
     $('calSample').onclick = sample;
@@ -429,6 +452,7 @@ END_IF`;
     $('calCodeTabs').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; cs().codeTab = b.dataset.ct; A.save(); renderResults(); });
     $('plcName').addEventListener('input', e => { cs().plc.name = e.target.value.replace(/[^A-Za-z0-9_]/g, '') || 'FB_VenturiFlow'; changed(false); });
     $('plcDpUnit').addEventListener('change', e => { cs().plc.dpUnit = e.target.value; changed(false); });
+    $('plcP1Unit').addEventListener('change', e => { cs().plc.p1Unit = e.target.value; changed(false); });
     $('plcLowCut').addEventListener('input', e => { const v = parseFloat(e.target.value); if (v >= 0 && v < 50) { cs().plc.lowCut = v; changed(false); } });
     $('calDownload').onclick = download;
   }
@@ -452,7 +476,7 @@ END_IF`;
     const out = [];
     for (let i = 1; i <= n; i++) {
       const dp = dpMax * Math.pow(i / n, 2);
-      out.push({ dp, qm: C.predict(s.r.model.id, s.r.params, s.geo, dp, pr.rho, pr.mu) });
+      out.push({ dp, qm: C.predict(s.r.model.id, s.r.params, s.geo, dp, pr.rho, pr.mu, c.inp.p1) });
     }
     return out;
   }
