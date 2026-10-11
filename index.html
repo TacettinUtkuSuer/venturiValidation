@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="tr" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VenturiFlow Master</title>
+  <meta name="description" content="Venturi tasarım, ISO 5167-4 / ASME MFC-3M doğrulama ve InfluxDB canlı izleme aracı">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230e151d'/%3E%3Cpath d='M3 9h7l5 5h2l5-5h7v14h-7l-5-5h-2l-5 5H3z' fill='none' stroke='%2322d3ee' stroke-width='2'/%3E%3C/svg%3E">
+
+  <script>
+    // Tema, ilk boyamadan önce uygulanır (yanıp sönmeyi önler)
+    try {
+      const s = JSON.parse(localStorage.getItem('venturiflow.state.v1') || '{}');
+      document.documentElement.dataset.theme = s.theme === 'light' ? 'light' : 'dark';
+    } catch (e) { /* localStorage kapalı olabilir */ }
+    window.tailwind = { config: { corePlugins: { preflight: false } } };
+    window.MathJax = {
+      tex: { inlineMath: [['\\(', '\\)']] },
+      svg: { fontCache: 'local' },
+      startup: { typeset: false }
+    };
+  </script>
+  <!-- Harici kütüphaneler (CDN) -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>
+
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ===================== ÜST ÇUBUK ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--panel-3)"/><path d="M3 9h7l5 5h2l5-5h7v14h-7l-5-5h-2l-5 5H3z" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
+      <div>
+        <h1>VenturiFlow Master</h1>
+        <small>Tasarım · Doğrulama · Canlı İzleme</small>
+      </div>
+    </div>
+    <span class="pill">Standart: <b id="pillStd">—</b></span>
+    <span class="pill">Akışkan: <b id="pillFluid">—</b></span>
+    <span class="pill"><span class="led" id="liveLed"></span><span id="liveText">Telemetri kapalı</span></span>
+    <div class="err-banner" id="errBanner"></div>
+    <div class="spacer"></div>
+    <button class="btn" id="btnExport" title="Tüm ayarları JSON olarak indir">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v3h16v-3"/></svg>JSON Yedekle</button>
+    <button class="btn" id="btnImport" title="JSON yedeğinden geri yükle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15V3m0 0L8 7m4-4l4 4M4 17v3h16v-3"/></svg>JSON Yükle</button>
+    <input type="file" id="fileJson" accept=".json,application/json" hidden>
+    <button class="btn primary" id="btnPdf" title="A4 PDF raporu indir">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z M14 2v6h6"/></svg>PDF Rapor</button>
+    <button class="btn icon" id="btnTheme" title="Gece / Gündüz modu">
+      <svg id="icoTheme" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg></button>
+    <button class="btn icon" id="btnHelp" title="Yardım">?</button>
+  </header>
+
+  <!-- ===================== ANA ALAN ===================== -->
+  <main class="main">
+
+    <!-- ---------- SOL PANEL ---------- -->
+    <aside class="card left">
+      <nav class="tabs" id="tabs">
+        <button data-tab="design" class="on">Tasarım</button>
+        <button data-tab="fluid">Akışkan</button>
+        <button data-tab="live">Canlı</button>
+        <button data-tab="units">Birimler</button>
+      </nav>
+
+      <!-- TASARIM -->
+      <section class="tab on" id="tab-design">
+        <div class="sec">Standart &amp; İmalat</div>
+        <label class="row"><span>Hesap metodu</span>
+          <select id="selMethod">
+            <option value="iso">ISO 5167-4:2003</option>
+            <option value="asme">ASME MFC-3M</option>
+            <option value="bernoulli">Basit Bernoulli</option>
+          </select></label>
+        <label class="row" id="rowMfg"><span>İmalat tipi</span>
+          <select id="selMfg">
+            <option value="cast">Ham döküm (As-cast)</option>
+            <option value="machined">İşlenmiş (Machined)</option>
+            <option value="welded">Kaba kaynaklı sac</option>
+          </select></label>
+        <div id="fieldsBernoulli"></div>
+
+        <div class="sec">Geometri</div>
+        <label class="row"><span>Boru kütüphanesi</span><select id="selPipe"></select></label>
+        <div id="fieldsGeom"></div>
+        <label class="row"><span>Çap oranı β = d/D</span>
+          <div class="inp"><input type="number" id="inpBeta" step="0.005" min="0.1" max="0.9"><span class="unit-static">–</span></div></label>
+
+        <div class="sec">İşletme Koşulları</div>
+        <div id="fieldsProc"></div>
+
+        <div class="sec">Belirsizlik Bileşenleri <span class="r">%95 güven</span></div>
+        <div id="fieldsUnc"></div>
+      </section>
+
+      <!-- AKIŞKAN -->
+      <section class="tab" id="tab-fluid">
+        <div class="sec">Akışkan Kütüphanesi</div>
+        <label class="row"><span>Aktif akışkan</span><select id="selFluid"></select></label>
+        <div class="btnrow">
+          <button class="btn sm" id="btnFluidNew">+ Yeni</button>
+          <button class="btn sm" id="btnFluidDup">Kopyala</button>
+          <button class="btn sm danger" id="btnFluidDel">Sil</button>
+        </div>
+        <div class="sec">Akışkan Tanımı</div>
+        <label class="row"><span>Ad</span><input type="text" id="fName"></label>
+        <div class="row"><span>Akışkan tipi</span>
+          <div class="seg" id="fType"><button data-v="liquid">Sıvı</button><button data-v="gas">Gaz</button></div></div>
+        <div id="fluidFields"></div>
+        <div id="fluidTableInfo" class="note"></div>
+        <div class="sec">Çalışma Koşullarında <span class="r" id="fCond"></span></div>
+        <div class="infobox" id="fResolved"></div>
+
+        <div class="sec">Akıllı CSV İçe Aktarma</div>
+        <p class="note">Özellik tablosu (T–ρ–μ–p<sub>v</sub>) veya doğrulama için ölçüm verisi (Debi–ΔP) yükleyin. Sütun sırası ve birimler eşleştirme ekranında seçilir.</p>
+        <div class="btnrow">
+          <button class="btn primary sm" id="btnCsv">CSV Dosyası Seç…</button>
+          <input type="file" id="fileCsv" accept=".csv,.txt,.tsv,text/csv" hidden>
+        </div>
+        <div class="infobox" id="measInfo"></div>
+        <p class="note">Örnek dosyalar: <a href="samples/su_ozellikleri.csv" download>su_ozellikleri.csv</a> · <a href="samples/olcum_verisi.csv" download>olcum_verisi.csv</a></p>
+      </section>
+
+      <!-- CANLI -->
+      <section class="tab" id="tab-live">
+        <div class="sec">InfluxDB v1.x (InfluxQL)</div>
+        <label class="row"><span>URL</span><input type="url" id="ixUrl" placeholder="http://10.10.2.6:8086"></label>
+        <label class="row"><span>Veritabanı</span><input type="text" id="ixDb" placeholder="db"></label>
+        <label class="row"><span>Kullanıcı <span class="hint">(ops.)</span></span><input type="text" id="ixUser" autocomplete="off"></label>
+        <label class="row"><span>Parola <span class="hint">(ops.)</span></span><input type="password" id="ixPass" autocomplete="new-password"></label>
+        <label class="row"><span>Measurement</span><input type="text" id="ixMeas" placeholder="venturi"></label>
+        <div class="mixed-warn" id="mixedWarn">⚠ Sayfa HTTPS, InfluxDB HTTP: tarayıcı istekleri engelleyebilir. <a id="lnkGuide">İzin verme rehberi →</a></div>
+
+        <div class="sec">ΔP Sensörü <span class="r">zorunlu</span></div>
+        <label class="row"><span>Field</span><input type="text" id="ixDpField" placeholder="value"></label>
+        <label class="row"><span>Tag anahtarı = değeri</span>
+          <div class="inp" style="gap:4px"><input type="text" id="ixDpTagK" placeholder="sensor" style="border-radius:5px"><input type="text" id="ixDpTagV" placeholder="DPT-101" style="border-radius:5px"></div></label>
+        <label class="row"><span>Sensör birimi</span><select id="ixDpUnit"></select></label>
+
+        <div class="sec">Debi Sensörü <span class="r"><label><input type="checkbox" id="ixQOn"> doğrulama için</label></span></div>
+        <label class="row"><span>Field</span><input type="text" id="ixQField" placeholder="value"></label>
+        <label class="row"><span>Tag anahtarı = değeri</span>
+          <div class="inp" style="gap:4px"><input type="text" id="ixQTagK" placeholder="sensor" style="border-radius:5px"><input type="text" id="ixQTagV" placeholder="FT-101" style="border-radius:5px"></div></label>
+        <label class="row"><span>Sensör birimi</span><select id="ixQUnit"></select></label>
+
+        <div class="sec">Sorgulama</div>
+        <label class="row"><span>Yenileme sıklığı</span>
+          <select id="ixRate">
+            <option value="1">1 sn</option><option value="2">2 sn</option><option value="5">5 sn</option>
+            <option value="10">10 sn</option><option value="30">30 sn</option><option value="60">60 sn</option>
+          </select></label>
+        <div class="btnrow">
+          <button class="btn sm" id="btnPing">Bağlantı Testi</button>
+          <button class="btn primary sm" id="btnLive">▶ Başlat</button>
+          <button class="btn sm" id="btnDemo" title="InfluxDB olmadan sentetik veri">Demo Modu</button>
+        </div>
+        <div class="live-vals">
+          <div><div class="k">ΔP (canlı)</div><div class="v red" id="lvDp">—</div></div>
+          <div><div class="k">Debi (hesap)</div><div class="v" id="lvQc">—</div></div>
+          <div><div class="k">Debi (ölçülen)</div><div class="v" id="lvQm">—</div></div>
+          <div><div class="k">Sapma</div><div class="v" id="lvDev">—</div></div>
+        </div>
+        <div class="log" id="ixLog"></div>
+      </section>
+
+      <!-- BİRİMLER -->
+      <section class="tab" id="tab-units">
+        <div class="sec">Gösterim Birimleri</div>
+        <div id="dispUnits"></div>
+        <p class="note">Tüm hesaplamalar SI biriminde yapılır; burada seçilen birimler göstergeler, grafik ve rapor için kullanılır. Her girişin yanındaki birim kutusu, değeri otomatik dönüştürür.</p>
+        <div class="sec">Hızlı Birim Dönüştürücü</div>
+        <label class="row"><span>Büyüklük</span><select id="cvDim"></select></label>
+        <label class="row"><span>Değer</span><div class="inp"><input type="number" id="cvVal" value="1" step="any"><select id="cvFrom"></select></div></label>
+        <table class="conv-out" id="cvOut"></table>
+        <p class="note" id="cvNote"></p>
+      </section>
+    </aside>
+
+    <!-- ---------- ORTA ALAN ---------- -->
+    <section class="center">
+      <div class="kpis" id="kpis"></div>
+
+      <div class="card">
+        <div class="card-h"><span class="ico">◧</span>Ölçekli Venturi Kesiti <span class="tag" id="drawTag"></span></div>
+        <div class="draw-wrap" id="drawing"></div>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-h"><span class="ico">⌁</span>Performans Eğrisi · Debi – ΔP
+          <span class="legend">
+            <span><i style="background:var(--accent)"></i>Teorik eğri</span>
+            <span><i style="background:#a78bfa"></i>What-If</span>
+            <span><i style="background:var(--amber)"></i>Ölçüm (CSV)</span>
+            <span><i style="background:#ff2d2d"></i>Canlı</span>
+          </span>
+        </div>
+        <div class="card-b">
+          <div class="chart-box" id="chartBox">
+            <canvas id="chart"></canvas>
+            <div class="live-dot" id="liveDot"><span class="lbl" id="liveDotLbl"></span></div>
+          </div>
+          <div class="whatif">
+            <label for="slWhatIf">What-If Debi</label>
+            <input type="range" id="slWhatIf" min="0" max="125" step="0.5" value="70">
+            <output id="outWhatIf">—</output>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- SAĞ PANEL ---------- -->
+    <aside class="right">
+      <div class="card formula-card">
+        <div class="card-h"><span class="ico">ƒ</span>Canlı Formül Paneli <span class="tag" id="fxTag"></span></div>
+        <div class="card-b" id="formulas"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="ico">±</span>Ölçüm Belirsizliği <span class="tag">ISO 5167-1 Ek E</span></div>
+        <div class="card-b" id="uncertainty" style="flex:none"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="ico">✓</span>Uygunluk Kontrolleri</div>
+        <div class="card-b" id="checks" style="flex:none"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="ico">═</span>Düz Boru Rehberi <span class="tag">ISO 5167-4 Tablo 1</span></div>
+        <div class="card-b" style="flex:none">
+          <label class="row" style="grid-template-columns: 110px 1fr"><span>Memba elemanı</span><select id="selFitting"></select></label>
+          <div class="straight" id="straight"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="statusbar">
+    <span id="stCalc">Hazır</span>
+    <span id="stSave"></span>
+    <span class="sep"></span>
+    <span>Tüm ayarlar tarayıcıda (localStorage) saklanır</span>
+    <span>v1.0</span>
+  </footer>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="js/units.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/fluids.js"></script>
+<script src="js/csv.js"></script>
+<script src="js/influx.js"></script>
+<script src="js/draw.js"></script>
+<script src="js/chart.js"></script>
+<script src="js/report.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
