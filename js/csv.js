@@ -68,7 +68,9 @@
     ],
     measure: [
       { key: 'q', name: 'Debi', dim: 'flow', req: true, re: /debi|flow|^q|m3|m³|lpm|gpm|kg\/[sh]/i },
-      { key: 'dp', name: 'Fark basınç ΔP', dim: 'pressure', req: true, re: /fark|^dp|Δp|delta|diff|dpt/i }
+      { key: 'dp', name: 'Fark basınç ΔP', dim: 'pressure', req: true, re: /fark|^dp|Δp|delta|diff|dpt/i },
+      { key: 'T', name: 'Sıcaklık (ops.)', dim: 'temperature', req: false, re: /sıcak|sicak|temp|^t$|^t[ _(\[]/i },
+      { key: 'rho', name: 'Yoğunluk (ops.)', dim: 'density', req: false, re: /yoğun|yogun|dens|rho|ρ/i }
     ]
   };
 
@@ -166,6 +168,8 @@
         } else {
           row.qv = raw.q; row.qu = map.q.unit; // hacimsel birimler gösterimde güncel ρ ile çevrilir
           row.dp = U.toSI('pressure', raw.dp, map.dp.unit);
+          row.T = isFinite(raw.T) ? U.toSI('temperature', raw.T, map.T.unit) : null;
+          row.rho = isFinite(raw.rho) ? U.toSI('density', raw.rho, map.rho.unit) : null;
         }
         out.push(row);
       }

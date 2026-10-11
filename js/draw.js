@@ -34,12 +34,12 @@
 
     const dimLine = (x1, x2, y, label) => `
       <line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${c.dim}" stroke-width="1" marker-start="url(#arr)" marker-end="url(#arr)"/>
-      <text x="${(x1 + x2) / 2}" y="${y - 4}" fill="${c.dim}" font-size="10.5" text-anchor="middle">${label}</text>`;
+      <text x="${(x1 + x2) / 2}" y="${y - 4}" fill="${c.dim}" font-size="13" text-anchor="middle">${label}</text>`;
     const vDim = (xx, y1, y2, label, rotate) => `
       <line x1="${xx}" y1="${y1}" x2="${xx}" y2="${y2}" stroke="${c.dim}" stroke-width="1" marker-start="url(#arr)" marker-end="url(#arr)"/>
       ${rotate
-        ? `<text transform="translate(${xx - 6} ${(y1 + y2) / 2}) rotate(-90)" fill="${c.text}" font-size="12" font-weight="600" text-anchor="middle">${label}</text>`
-        : `<text x="${xx + 6}" y="${(y1 + y2) / 2 + 4}" fill="${c.text}" font-size="12" font-weight="600">${label}</text>`}`;
+        ? `<text transform="translate(${xx - 6} ${(y1 + y2) / 2}) rotate(-90)" fill="${c.text}" font-size="14.5" font-weight="600" text-anchor="middle">${label}</text>`
+        : `<text x="${xx + 6}" y="${(y1 + y2) / 2 + 4}" fill="${c.text}" font-size="14.5" font-weight="600">${label}</text>`}`;
 
     const yDim = cy + R + wt + 18;
     let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="100%" height="100%" font-family="Inter, Segoe UI, Arial, sans-serif" preserveAspectRatio="xMidYMid meet">
@@ -57,7 +57,7 @@
     `;
     // Basınç alma noktaları (p₁ girişte D/2, p₂ boğaz ortası)
     const tap = (xx, yy, label) => `<line x1="${xx}" y1="${yy}" x2="${xx}" y2="${yy - wt - 14}" stroke="${c.tap}" stroke-width="2.5"/>
-      <circle cx="${xx}" cy="${yy - wt - 16}" r="3.5" fill="${c.tap}"/><text x="${xx}" y="${yy - wt - 23}" fill="${c.tap}" font-size="11" font-weight="700" text-anchor="middle">${label}</text>`;
+      <circle cx="${xx}" cy="${yy - wt - 16}" r="3.5" fill="${c.tap}"/><text x="${xx}" y="${yy - wt - 23}" fill="${c.tap}" font-size="13.5" font-weight="700" text-anchor="middle">${label}</text>`;
     svg += tap(x[0] + g.Lin * s * 0.5, cy - R, 'p₁');
     svg += tap((x[2] + x[3]) / 2, cy - r, 'p₂');
 
@@ -67,7 +67,7 @@
     svg += dimLine(x[1], x[2], yDim, 'Konvergent ' + f(g.Lc) + ' · 21°');
     svg += dimLine(x[2], x[3], yDim + 16, 'Boğaz ' + f(g.Lt));
     svg += dimLine(x[3], x[4], yDim, 'Difüzör ' + f(g.Ld) + ' · ' + o.theta.toFixed(1) + '°');
-    svg += `<text x="${x[5] + 4}" y="${padTop - 8}" fill="${c.dim}" font-size="10.5" text-anchor="end">Toplam boy ≈ ${f(g.Lc + g.Lt + g.Ld)} (giriş/çıkış silindirleri hariç) · ölçekli çizim</text>`;
+    svg += `<text x="${x[5] + 4}" y="${padTop - 8}" fill="${c.dim}" font-size="13" text-anchor="end">Toplam boy ≈ ${f(g.Lc + g.Lt + g.Ld)} (giriş/çıkış silindirleri hariç) · ölçekli çizim</text>`;
 
     // Basınç profili (hidrolik eğim çizgisi)
     if (o.profile && o.profile.dp > 0) {
@@ -77,10 +77,10 @@
       const pts = [[x[0], p.p1], [x[1], p.p1], [x[2], p.p1 - p.dp], [x[3], p.p1 - p.dp], [x[4], p.p1 - p.loss], [x[5], p.p1 - p.loss]];
       svg += `<line x1="${x[0]}" y1="${yOf(p.p1)}" x2="${x[5]}" y2="${yOf(p.p1)}" stroke="${c.axis}" stroke-dasharray="3 3"/>
         <path d="${path(pts.map(([px, pv]) => [px, yOf(pv)]))}" fill="none" stroke="${c.press}" stroke-width="2"/>
-        <text x="${x[0]}" y="${y0 - 2}" fill="${c.press}" font-size="10.5">Basınç profili</text>
-        <text x="${(x[2] + x[3]) / 2}" y="${yOf(p.p1 - p.dp) - 4}" fill="${c.press}" font-size="10.5" text-anchor="middle">ΔP ${p.fmtP(p.dp)}</text>
+        <text x="${x[0]}" y="${y0 - 2}" fill="${c.press}" font-size="13">Basınç profili</text>
+        <text x="${(x[2] + x[3]) / 2}" y="${yOf(p.p1 - p.dp) - 4}" fill="${c.press}" font-size="13" text-anchor="middle">ΔP ${p.fmtP(p.dp)}</text>
         <line x1="${x[5] - 6}" y1="${yOf(p.p1)}" x2="${x[5] - 6}" y2="${yOf(p.p1 - p.loss)}" stroke="${c.tap}" stroke-width="2"/>
-        <text x="${x[5] - 10}" y="${yOf(p.p1 - p.loss) + 14}" fill="${c.tap}" font-size="10.5" text-anchor="end">Kalıcı kayıp ${p.fmtP(p.loss)}</text>`;
+        <text x="${x[5] - 10}" y="${yOf(p.p1 - p.loss) + 14}" fill="${c.tap}" font-size="13" text-anchor="end">Kalıcı kayıp ${p.fmtP(p.loss)}</text>`;
     }
     svg += '</svg>';
     return svg;

@@ -74,6 +74,11 @@
         </div>
       </div>
 
+      ${rep.calib ? `<div class="avoid"><h2>Yerinde Kalibrasyon (Coriolis referanslı)</h2>
+        <p>Model: <b>${esc(rep.calib.name)}</b> · ${rep.calib.n} test noktası · uydurma maks ±%${rep.calib.fit.maxAbs.toFixed(2)}${rep.calib.loo ? ` · çapraz doğrulama maks ±%${rep.calib.loo.maxAbs.toFixed(2)}` : ''} · tahmini kalibre belirsizlik ±%${rep.calib.u !== null ? rep.calib.u.toFixed(2) : '—'} ·
+        ${rep.calib.applied ? 'canlı izlemede <b>kullanılıyor</b>' : 'canlı izlemede kullanılmıyor'}</p>
+        <pre class="code">${esc(rep.calib.text)}</pre></div>` : ''}
+
       <h2>9. Kullanılan Denklemler</h2>
       ${fx.join('')}
 

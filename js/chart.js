@@ -25,7 +25,7 @@
         ctx.strokeStyle = l.color; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2;
         ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = l.color; ctx.font = '600 10.5px Inter, Segoe UI, sans-serif';
+        ctx.fillStyle = l.color; ctx.font = '600 12.5px Inter, Segoe UI, sans-serif';
         ctx.textAlign = 'right';
         ctx.save(); ctx.translate(px - 4, a.top + 4); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'right'; ctx.fillText(l.label, 0, 0); ctx.restore();
       }
@@ -65,17 +65,18 @@
           { label: 'Ölçüm (CSV)', data: data.measured, borderColor: c.amber, backgroundColor: c.amber + '99', pointRadius: 3.5, pointStyle: 'rectRot', order: 3 },
           { label: 'What-If', data: data.whatIf ? [data.whatIf] : [], borderColor: '#fff', backgroundColor: c.whatif, borderWidth: 2, pointRadius: 7, pointHoverRadius: 8, order: 1 },
           { label: 'Canlı iz', data: data.trail || [], backgroundColor: 'rgba(255,45,45,0.30)', borderColor: 'rgba(255,45,45,0.5)', pointRadius: 2.5, order: 2 },
-          { label: 'Canlı', data: data.live ? [data.live] : [], backgroundColor: '#ff2d2d', borderColor: '#ff2d2d', pointRadius: light ? 6 : 0, order: 0 }
+          { label: 'Canlı', data: data.live ? [data.live] : [], backgroundColor: '#ff2d2d', borderColor: '#ff2d2d', pointRadius: light ? 6 : 0, order: 0 },
+          { label: 'Kalibre eğri', data: data.calib || [], showLine: true, borderColor: light ? '#be185d' : '#f472b6', backgroundColor: light ? '#be185d' : '#f472b6', borderWidth: 2.2, borderDash: [7, 4], pointRadius: 0, tension: 0.2, order: 4 }
         ]
       },
       options: {
-        animation: light ? false : { duration: 250 },
+        animation: false,
         responsive: !light, maintainAspectRatio: false,
         parsing: false, normalized: true,
         interaction: { mode: 'nearest', intersect: false },
         scales: {
-          x: { type: 'linear', min: 0, max: data.xMax, title: { display: true, text: data.xLabel, color: c.text, font: { size: 11, weight: '600' } }, grid: { color: c.grid }, ticks: { color: c.text, font: { size: 10.5 } } },
-          y: { type: 'linear', min: 0, max: data.yMax, title: { display: true, text: data.yLabel, color: c.text, font: { size: 11, weight: '600' } }, grid: { color: c.grid }, ticks: { color: c.text, font: { size: 10.5 } } }
+          x: { type: 'linear', min: 0, max: data.xMax, title: { display: true, text: data.xLabel, color: c.text, font: { size: 13.5, weight: '600' } }, grid: { color: c.grid }, ticks: { color: c.text, font: { size: 12.5 } } },
+          y: { type: 'linear', min: 0, max: data.yMax, title: { display: true, text: data.yLabel, color: c.text, font: { size: 13.5, weight: '600' } }, grid: { color: c.grid }, ticks: { color: c.text, font: { size: 12.5 } } }
         },
         plugins: {
           legend: { display: !!light, labels: { color: c.text, boxWidth: 10, font: { size: 10 }, filter: i => !/bandı \(−\)|Canlı iz/.test(i.text) } },
@@ -94,7 +95,8 @@
   function init(canvas, dot, lbl) {
     dotEl = dot; dotLbl = lbl;
     if (typeof Chart === 'undefined') return false;
-    chart = new Chart(canvas.getContext('2d'), config({ curve: [], bandHi: [], bandLo: [], measured: [], limits: [], xLabel: '', yLabel: '' }, false));
+    Chart.defaults.font.size = 13;
+    chart = new Chart(canvas.getContext('2d'), config({ curve: [], bandHi: [], bandLo: [], measured: [], limits: [], calib: [], xLabel: '', yLabel: '' }, false));
     return true;
   }
 
@@ -107,7 +109,7 @@
     chart.options.plugins.vfLimits = cfg.options.plugins.vfLimits;
     chart.options.plugins.vfDot = cfg.options.plugins.vfDot;
     chart.options.plugins.tooltip = cfg.options.plugins.tooltip;
-    chart.update('none');
+    chart.update();
   }
 
   /** Yalnızca canlı nokta/iz güncellemesi (hafif) */
@@ -117,7 +119,7 @@
     chart.data.datasets[5].data = trail || [];
     chart.data.datasets[6].data = live ? [live] : [];
     chart.options.plugins.vfDot = { point: live };
-    chart.update('none');
+    chart.update();
   }
 
   function applyTheme() {
@@ -125,7 +127,7 @@
     const cfg = config(last, false);
     chart.data.datasets.forEach((ds, i) => Object.assign(ds, cfg.data.datasets[i]));
     chart.options = cfg.options;
-    chart.update('none');
+    chart.update();
   }
 
   /** Rapor için açık temalı, animasyonsuz PNG */
