@@ -90,7 +90,28 @@
       } catch (e) {
         $('stSave').textContent = '⚠ Kaydedilemedi (localStorage kapalı)';
       }
+      if (VF.Sync) VF.Sync.notifyChange();
     }, 300);
+  }
+
+  /* ---------- Ortak kayıt (GitHub) için paylaşılan durum ----------
+   * Tema, açık sekme ve InfluxDB parolası her bilgisayarda yerel kalır. */
+  const LOCAL_ONLY = s => ({ theme: s.theme, tab: s.tab, pass: s.influx.pass });
+
+  function getSharedJson() {
+    const s = JSON.parse(JSON.stringify(state));
+    delete s.theme; delete s.tab;
+    s.influx.pass = '';
+    return JSON.stringify(s);
+  }
+
+  function applyShared(remote) {
+    const keep = LOCAL_ONLY(state);
+    state = merge(defaults(), remote);
+    state.theme = keep.theme; state.tab = keep.tab; state.influx.pass = keep.pass;
+    if (!state.fluids.length) state.fluids = JSON.parse(JSON.stringify(F.BUILTIN));
+    if (!state.fluids.find(f => f.id === state.activeFluid)) state.activeFluid = state.fluids[0].id;
+    initUI();
   }
 
   /* ============================================================
@@ -966,7 +987,8 @@
         <li><b>Akışkan</b> sekmesinde sıvı/gaz seçin; viskozite zorunludur. Sıcaklığa bağlı özellikler için CSV içe aktarın.</li>
         <li>Göstergeler, ölçekli çizim, performans eğrisi ve formül paneli anında güncellenir. <b>What-If</b> kaydırıcısı ile çalışma noktasını değiştirin.</li>
         <li><b>Canlı</b> sekmesinden InfluxDB v1 bağlantısını kurun; ölçülen ΔP grafikte kırmızı nokta olarak görünür. Debi sensörü eklenirse sapma, belirsizlik sınırına göre değerlendirilir.</li>
-        <li><b>JSON Yedekle</b> ile tüm ayarları saklayın, <b>PDF Rapor</b> ile A4 raporu indirin.</li></ol>
+        <li><b>JSON Yedekle</b> ile tüm ayarları saklayın, <b>PDF Rapor</b> ile A4 raporu indirin.</li>
+        <li><b>☁ Ortak</b> düğmesi: ortak parola bir kez girildiğinde tasarımlar GitHub üzerinden tüm bilgisayarlarla otomatik eşitlenir. Parolası olmayan bilgisayarlar salt okunur çalışır.</li></ol>
         <h4>Grafik</h4><ul>
         <li>Kesikli turkuaz çizgiler: debi ölçüm belirsizliği bandı (±U).</li>
         <li>Dikey çizgiler: tasarım maks. debi, kavitasyon başlangıcı (sıvı) veya τ = 0,75 sınırı (gaz).</li></ul>
@@ -1044,6 +1066,7 @@
       $('chartBox').innerHTML = '<p class="note bad" style="padding:20px">Chart.js yüklenemedi — internet/CDN erişimini kontrol edin.</p>';
     }
     initUI();
+    if (VF.Sync) VF.Sync.init({ getSharedJson, applyShared, toast: UI.toast, modal: UI.modal });
     // MathJax asenkron yüklenir; hazır olduğunda formülleri dizgele
     const waitMJ = setInterval(() => {
       if (window.MathJax && MathJax.typesetPromise) { clearInterval(waitMJ); fxSig = ''; lastCalc && renderFormulas(lastCalc.res, lastCalc.c); }

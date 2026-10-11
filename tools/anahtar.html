@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="tr" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anahtar Şifreleme</title>
+  <link rel="stylesheet" href="../css/app.css">
+  <style>
+    body { overflow: auto; }
+    .wrap { max-width: 720px; margin: 24px auto; padding: 0 16px; }
+    .card { padding: 0; margin-bottom: 12px; }
+    .card-b { overflow: visible; }
+    .row { grid-template-columns: 200px minmax(0, 1fr); }
+    textarea { width: 100%; height: 190px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border-hi); border-radius: 6px; padding: 8px; font: 11.5px/1.4 Consolas, monospace; }
+    ol { margin: 4px 0 4px 18px; padding: 0; }
+    li { margin: 3px 0; }
+    .msg { min-height: 18px; font-weight: 600; margin: 6px 0; }
+    .msg.ok { color: var(--ok); } .msg.err { color: var(--bad); }
+    @media (max-width: 640px) { .row { grid-template-columns: minmax(0, 1fr); } }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h2 style="color:var(--text-strong);margin:0 0 4px">VenturiFlow — Ortak Kayıt Anahtarı</h2>
+  <p class="note">Bu sayfa GitHub anahtarınızı <b>bu tarayıcıda</b> ortak parolayla şifreler. Anahtar ve parola hiçbir yere gönderilmez; yalnızca depo erişimini test etmek için GitHub'a tek bir istek yapılır.</p>
+
+  <div class="card">
+    <div class="card-h">1 · Hazırlık</div>
+    <div class="card-b">
+      <ol>
+        <li>GitHub'da veri deposunu açın (ör. <code>venturiValidation-data</code>).</li>
+        <li><b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
+        <li><b>Repository access:</b> <i>Only select repositories</i> → yalnızca veri deposu.</li>
+        <li><b>Permissions → Repository permissions → Contents:</b> <i>Read and write</i>. Başka izin vermeyin.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h">2 · Şifrele</div>
+    <div class="card-b">
+      <label class="row"><span>Depo sahibi</span><input type="text" id="owner"></label>
+      <label class="row"><span>Veri deposu</span><input type="text" id="repo"></label>
+      <label class="row"><span>Dosya yolu</span><input type="text" id="path"></label>
+      <label class="row"><span>GitHub anahtarı (token)</span><input type="password" id="token" placeholder="github_pat_…" autocomplete="off"></label>
+      <label class="row"><span>Ortak parola</span><input type="password" id="pass" autocomplete="new-password"></label>
+      <label class="row"><span>Ortak parola (tekrar)</span><input type="password" id="pass2" autocomplete="new-password"></label>
+      <div class="btnrow"><button class="btn primary" id="go">Test Et ve Şifrele</button></div>
+      <div class="msg" id="msg"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h">3 · Uygulamaya ekle</div>
+    <div class="card-b">
+      <p class="note">Aşağıdaki içerik uygulama deposundaki <code>js/sync-config.js</code> dosyasının yeni hâlidir. İçinde anahtarın kendisi yoktur, sadece şifreli hâli vardır.</p>
+      <textarea id="out" readonly placeholder="Şifreleme sonrası burada görünecek"></textarea>
+      <div class="btnrow">
+        <button class="btn" id="copy" disabled>Kopyala</button>
+        <button class="btn" id="dl" disabled>sync-config.js indir</button>
+      </div>
+      <ol>
+        <li>GitHub'da uygulama deposunda <code>js/sync-config.js</code> dosyasını açın → ✏️ <b>Edit</b>.</li>
+        <li>İçeriği tamamen yukarıdakiyle değiştirin → <b>Commit changes</b>.</li>
+        <li>Birkaç dakika sonra uygulamayı açın; ilk açılışta ortak parola sorulur.</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<script src="../js/csv.js"></script>
+<script src="../js/sync-config.js"></script>
+<script src="../js/sync.js"></script>
+<script>
+  (function () {
+    const $ = id => document.getElementById(id);
+    const c = window.VF_SYNC_CONFIG || {};
+    $('owner').value = c.owner || '';
+    $('repo').value = c.repo || '';
+    $('path').value = c.path || 'venturiflow.json';
+    const msg = (t, cls) => { $('msg').textContent = t; $('msg').className = 'msg ' + (cls || ''); };
+
+    $('go').onclick = async () => {
+      const owner = $('owner').value.trim(), repo = $('repo').value.trim(), path = $('path').value.trim();
+      const token = $('token').value.trim(), pass = $('pass').value;
+      if (!owner || !repo || !path || !token || !pass) return msg('Tüm alanları doldurun.', 'err');
+      if (pass !== $('pass2').value) return msg('Parolalar eşleşmiyor.', 'err');
+      msg('GitHub erişimi test ediliyor…');
+      try {
+        const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
+          headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + token }, cache: 'no-store'
+        });
+        if (res.status === 401) return msg('Anahtar geçersiz (401).', 'err');
+        if (!res.ok) return msg(`Depoya erişilemedi (HTTP ${res.status}). Depo adını ve anahtarın depo erişimini kontrol edin.`, 'err');
+        const j = await res.json();
+        msg('Şifreleniyor…');
+        const cipher = await VF.Sync.encrypt(token, pass);
+        $('out').value = `/* VenturiFlow Master — Ortak kayıt (GitHub) yapılandırması
+ *
+ * owner / repo / path : Ortak verinin tutulacağı depo ve dosya.
+ * cipher              : tools/anahtar.html ile üretilen ŞİFRELİ GitHub anahtarı.
+ *                       null ise kimse yazamaz; depo public ise herkes sadece okur.
+ */
+window.VF_SYNC_CONFIG = {
+  owner: ${JSON.stringify(owner)},
+  repo: ${JSON.stringify(repo)},
+  path: ${JSON.stringify(path)},
+  cipher: ${JSON.stringify(cipher)}
+};
+`;
+        $('copy').disabled = $('dl').disabled = false;
+        $('token').value = '';
+        msg(`Tamam: ${j.full_name} (${j.private ? 'private' : 'public'}) erişilebilir, anahtar şifrelendi.` + (j.private ? ' Not: Depo private olduğu için parolası olmayan bilgisayarlar ortak veriyi göremez.' : ''), 'ok');
+      } catch (e) {
+        msg('Hata: ' + e.message, 'err');
+      }
+    };
+    $('copy').onclick = () => { navigator.clipboard.writeText($('out').value).then(() => msg('Panoya kopyalandı.', 'ok')); };
+    $('dl').onclick = () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([$('out').value], { type: 'text/javascript' }));
+      a.download = 'sync-config.js';
+      a.click();
+    };
+  })();
+</script>
+</body>
+</html>

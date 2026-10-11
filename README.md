@@ -4,7 +4,7 @@
 
 - **Sıfır kurulum:** Build/derleme yok. Saf HTML5 + Vanilla JS + CSS. Doğrudan tarayıcıda veya GitHub Pages'te çalışır.
 - **1080p kaydırmasız SCADA/HMI arayüzü:** 1920×1080 ekrana tam sığar. Gece/Gündüz modu vardır, varsayılan Gece modudur.
-- **Kalıcılık:** Tüm ayarlar `localStorage`'da saklanır. JSON ile dışa/içe aktarılabilir.
+- **Kalıcılık:** Ayarlar `localStorage`'da saklanır, JSON ile dışa/içe aktarılabilir ve [Ortak Kayıt](#ortak-kayıt-github-ile-tüm-bilgisayarlarda-aynı-veri) ile GitHub üzerinden tüm bilgisayarlarda otomatik eşitlenir.
 
 ---
 
@@ -14,27 +14,24 @@
 2. [Modüller](#modüller)
 3. [Matematiksel Model](#matematiksel-model)
 4. [GitHub Pages ile Yayınlama](#github-pages-ile-yayınlama)
-5. [InfluxDB v1 Kurulumu ve Bağlantı](#influxdb-v1-kurulumu-ve-bağlantı)
-6. [HTTPS / Mixed Content Sorunu](#https--mixed-content-sorunu)
-7. [CSV Formatları](#csv-formatları)
-8. [Dosya Yapısı](#dosya-yapısı)
-9. [Varsayımlar ve Sınırlamalar](#varsayımlar-ve-sınırlamalar)
+5. [Ortak Kayıt (GitHub ile Tüm Bilgisayarlarda Aynı Veri)](#ortak-kayıt-github-ile-tüm-bilgisayarlarda-aynı-veri)
+6. [InfluxDB v1 Kurulumu ve Bağlantı](#influxdb-v1-kurulumu-ve-bağlantı)
+7. [HTTPS / Mixed Content Sorunu](#https--mixed-content-sorunu)
+8. [CSV Formatları](#csv-formatları)
+9. [Dosya Yapısı](#dosya-yapısı)
+10. [Varsayımlar ve Sınırlamalar](#varsayımlar-ve-sınırlamalar)
 
 ---
 
 ## Hızlı Başlangıç
 
-```bash
-git clone https://github.com/TacettinUtkuSuer/venturiValidation.git
-cd venturiValidation
+Kurulum gerekmez. Üç yoldan biriyle açın:
 
-# Seçenek A: Doğrudan aç
-#   index.html dosyasına çift tıklayın (file://). İnternet bağlantısı gerekir (CDN kütüphaneleri).
-
-# Seçenek B: Yerel HTTP sunucusu (InfluxDB'ye HTTP erişimi için önerilir)
-python -m http.server 8080
-#   → http://localhost:8080
-```
+| Yol | Nasıl | Ne zaman |
+|---|---|---|
+| **GitHub Pages linki** (önerilen) | `https://tacettinutkusuer.github.io/venturiValidation/` adresini açın | Paylaşım ve günlük kullanım. Pages'in açık olması gerekir, bkz. [GitHub Pages ile Yayınlama](#github-pages-ile-yayınlama) |
+| **ZIP** | Depo sayfası → **Code → Download ZIP** → `index.html`'e çift tıklayın | Tek bilgisayar, InfluxDB'ye HTTP ile bağlanılacaksa |
+| **Yerel sunucu** (isteğe bağlı) | Klasörde `python -m http.server 8080` → `http://localhost:8080` | InfluxDB bağlantısında tarayıcı izniyle uğraşmamak için |
 
 Harici kütüphaneler CDN'den `<script>` etiketiyle yüklenir. Sürümler sabittir:
 
@@ -217,6 +214,32 @@ Memba mesafeleri ISO 5167-4 Tablo 1 esas alınarak β = 0,30 … 0,75 aralığı
 
 ---
 
+## Ortak Kayıt (GitHub ile Tüm Bilgisayarlarda Aynı Veri)
+
+Tasarımlar, akışkanlar, ölçüm verisi ve InfluxDB ayarları GitHub'daki bir veri deposunda tek bir JSON dosyasında tutulur. Tüm bilgisayarlar aynı veriyi görür. Ayrı bir sunucu gerekmez.
+
+**Nasıl çalışır:**
+- Bir bilgisayarda ortak parola **bir kez** girilir; sonrasında değişiklikler ~5 saniye içinde otomatik kaydedilir. Her kayıt bir commit'tir, geçmiş GitHub'da durur.
+- Uygulama açılışta ve dakikada bir (salt okunur bilgisayarlarda 3 dakikada bir) ortak dosyayı kontrol eder, yeni sürüm varsa yükler.
+- Parolası girilmemiş bilgisayarlar **salt okunur** çalışır (veri deposu public ise).
+- İki bilgisayar aynı anda değiştirirse uygulama sorar: *Ortak sürümü yükle* veya *Benimkini koru*.
+- Üst çubuktaki **☁ Ortak** düğmesi durumu gösterir: eşit / bekliyor / kaydediliyor / salt okunur / çakışma.
+- Tema, açık sekme ve InfluxDB parolası her bilgisayarda yerel kalır, ortak dosyaya yazılmaz.
+
+**Kurulum (bir kez):**
+1. GitHub'da veri deposu açın: `venturiValidation-data` (public: herkes okuyabilir; private: sadece parolası olanlar okur).
+2. Fine-grained token oluşturun: **Settings → Developer settings → Personal access tokens → Fine-grained tokens**.
+   - Repository access: *Only select repositories* → yalnızca `venturiValidation-data`
+   - Permissions → Contents: **Read and write** (başka izin vermeyin)
+3. Uygulamada `tools/anahtar.html` sayfasını açın (GitHub Pages'te: `https://<kullanıcı>.github.io/venturiValidation/tools/anahtar.html`).
+   Token'ı ve ortak parolayı girin → **Test Et ve Şifrele**. Token ve parola bu tarayıcıdan çıkmaz.
+4. Üretilen içerikle uygulama deposundaki `js/sync-config.js` dosyasını değiştirip commit edin. Dosyada token'ın kendisi değil, şifreli hâli bulunur.
+5. Uygulamayı açın; ilk açılışta ortak parola sorulur.
+
+**Güvenlik notu:** Şifreli anahtar herkese açık kodda durur. Kısa bir parola deneme yoluyla bulunabilir, bu durumda biri veri dosyasını değiştirebilir (eski hâli commit geçmişinden geri alınabilir). Anahtar yalnızca veri deposuna yetkili olduğundan uygulama kodu etkilenmez. Parola sızarsa: GitHub'da token'ı iptal edin, yenisini oluşturup 3–4. adımları tekrarlayın.
+
+---
+
 ## InfluxDB v1 Kurulumu ve Bağlantı
 
 ### 1. Kurulum
@@ -347,6 +370,9 @@ js/draw.js          MODÜL 4 — Ölçekli SVG Venturi kesiti ve basınç profil
 js/chart.js         MODÜL 4/5 — Chart.js eğrisi, sınır çizgileri, canlı kırmızı nokta
 js/report.js        MODÜL 6 — html2pdf A4 raporu
 js/app.js           Durum yönetimi, localStorage, arayüz bağlama, telemetri döngüsü, JSON yedek
+js/sync.js          Ortak kayıt — GitHub Contents API eşitleme, PBKDF2 + AES-GCM anahtar çözme, çakışma kontrolü
+js/sync-config.js   Ortak kayıt deposu ve şifreli anahtar
+tools/anahtar.html  Token'ı ortak parolayla şifreleyen yardımcı sayfa
 samples/            Örnek CSV dosyaları
 .nojekyll           GitHub Pages için Jekyll'i devre dışı bırakır
 ```
