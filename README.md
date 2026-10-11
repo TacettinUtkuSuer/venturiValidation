@@ -22,7 +22,8 @@
 9. [HTTPS / Mixed Content Sorunu](#https--mixed-content-sorunu)
 10. [CSV Formatları](#csv-formatları)
 11. [Dosya Yapısı](#dosya-yapısı)
-12. [Varsayımlar ve Sınırlamalar](#varsayımlar-ve-sınırlamalar)
+12. [Testler](#testler)
+13. [Varsayımlar ve Sınırlamalar](#varsayımlar-ve-sınırlamalar)
 
 ---
 
@@ -33,17 +34,19 @@ Kurulum gerekmez. Üç yoldan biriyle açın:
 | Yol | Nasıl | Ne zaman |
 |---|---|---|
 | **GitHub Pages linki** (önerilen) | `https://tacettinutkusuer.github.io/venturiValidation/` adresini açın | Paylaşım ve günlük kullanım. Pages'in açık olması gerekir, bkz. [GitHub Pages ile Yayınlama](#github-pages-ile-yayınlama) |
-| **ZIP** | Depo sayfası → **Code → Download ZIP** → `index.html`'e çift tıklayın | Tek bilgisayar, InfluxDB'ye HTTP ile bağlanılacaksa |
+| **ZIP** | Depo sayfası → **Code → Download ZIP** → `index.html`'e çift tıklayın | Tek bilgisayar, **internetsiz** tesis ağı, InfluxDB'ye HTTP ile bağlanılacaksa |
 | **Yerel sunucu** (isteğe bağlı) | Klasörde `python -m http.server 8080` → `http://localhost:8080` | InfluxDB bağlantısında tarayıcı izniyle uğraşmamak için |
 
-Harici kütüphaneler CDN'den `<script>` etiketiyle yüklenir. Sürümler sabittir:
+**İnternet gerekmez.** Tüm kütüphaneler depoda (`lib/`) bulunur; uygulama tesis ağındaki internetsiz SCADA bilgisayarlarında da tam çalışır. Yalnızca ortak kayıt (GitHub) özelliği internete çıkar.
 
-| Kütüphane | Sürüm | Kullanım |
-|---|---|---|
-| Tailwind CSS (Play CDN) | 3.4.16 | Yardımcı sınıflar (preflight kapalı, tema `css/app.css`'te) |
-| Chart.js | 4.4.1 | Debi–ΔP performans eğrisi |
-| MathJax | 3.2.2 (tex-svg) | Canlı formül paneli ve PDF'teki denklemler |
-| html2pdf.js | 0.10.1 | A4 PDF raporu |
+| Kütüphane | Sürüm | Lisans | Kullanım |
+|---|---|---|---|
+| Chart.js | 4.4.1 | MIT | Performans eğrisi, trend, kalibrasyon ve akışkan grafikleri |
+| MathJax (tex-svg) | 3.2.2 | Apache-2.0 | Formül paneli, PDF denklemleri, yardım penceresi |
+| html2pdf.js | 0.10.1 | MIT | A4 PDF raporu |
+| marked | 12.0.2 | MIT | **?** düğmesindeki kullanım kılavuzu (bu README) |
+
+Üst çubuktaki **?** düğmesi bu README'yi içindekiler listesi ve başlık aramasıyla uygulama içinde açar.
 
 ---
 
@@ -110,7 +113,7 @@ Hesaplanan büyüklükler:
 
 ### MODÜL 5 — InfluxDB v1 Entegrasyonu & Telemetri
 
-- InfluxDB 1.x HTTP API'sine (`/ping`, `/query`) InfluxQL ile bağlanılır. Varsayılanlar: `http://10.10.2.6:8086`, db `lc_100`, measurement `telemetry`. Bağlantı ayarları tüm venturiler için ortaktır.
+- InfluxDB 1.x HTTP API'sine (`/ping`, `/query`) InfluxQL ile bağlanılır. Varsayılanlar: `http://10.10.2.6:8086`, db `lc_100`, measurement `telemetry`. Bağlantı ayarları **her venturiye özeldir** (farklı venturiler farklı sunucu/veritabanında olabilir); yeni venturi açık olanın bağlantısını devralır.
 - **Sensör adı:** Her sensör için sadece adı yazılır (ör. `P1`). Varsayılan olarak ad, **field adı** kabul edilir:
 
   ```sql
@@ -131,7 +134,9 @@ Hesaplanan büyüklükler:
   - **kendi hareketli ortalaması** (ham, 3/5/6/10/12/20/30, özel, tümü).
 
   Her sensör kartının altında ham, düzeltilmiş ve ortalama değer ile tampon doluluğu gösterilir.
-- **＋ Kalibrasyona ekle:** Anlık ortalama ΔP, Coriolis debi, T ve ρ değerlerini tek tıkla kalibrasyon tablosuna ekler.
+- **＋ Kalibrasyona ekle:** Anlık ortalama ΔP, Coriolis debi, T, ρ ve P1 değerlerini tek tıkla kalibrasyon tablosuna ekler.
+- **⊘ ΔP sıfırla:** Akış durmuşken ΔP'yi sıfırlar; ofset (b) otomatik hesaplanır ve kaydedilir. Doğrudan modda ΔP kartında, P1 − P2 modunda P2 kartındadır (P2'nin ofseti, P1 − P2 = 0 olacak şekilde ayarlanır). Onay istenir.
+- **Zaman trendi:** Performans grafiği kartındaki **Zaman trendi** sekmesi; hesaplanan debi, Coriolis debisi, ΔP ve sapma %'nin son 2/5/10/30/60 dakikalık grafiği. Göstergeye tıklayarak seri gizlenir/açılır.
 - **Doğrulama:** Coriolis debisi ile hesaplanan debi arasındaki sapma gösterilir ve belirsizlik sınırına göre ✓/✗ değerlendirilir. Kalibrasyon aktifse hesap kalibre modelle yapılır ve sınır kalibre belirsizliktir.
 - **HTTPS Mixed Content:** Bu durum otomatik algılanır. Hem bir uyarı hem de adım adım bir izin rehberi (popup) gösterilir.
 - **Demo modu:** InfluxDB olmadan sentetik veriyle canlı ekran test edilebilir.
@@ -236,14 +241,16 @@ Memba mesafeleri ISO 5167-4 Tablo 1 esas alınarak β = 0,30 … 0,75 aralığı
 | **⧉** | Açık venturinin kopyası. Kopya açılır, üzerinde değişiklik yapılabilir; asıl venturi etkilenmez. |
 | **☰ Venturiler** | Tüm liste: ad ve not/konum düzenleme, geometri/akışkan/ΔP sensörü/kalibrasyon özeti, aç, kopyala, tek venturiyi JSON olarak indir (⤓), sil, venturi dosyası içe aktar. |
 
-**Her venturiye özel olanlar:** Standart ve imalat tipi, geometri ve işletme girdileri, akışkan seçimi, What-If noktası, ölçüm (CSV) verisi, kalibrasyon test noktaları ve model ayarları, sensör adları/birimleri/a·x+b düzeltmeleri/ortalamaları, ΔP kaynağı.
+**Her venturiye özel olanlar (akışkan kütüphanesi dışındaki her şey):** Standart ve imalat tipi, geometri ve işletme girdileri, akışkan seçimi, gösterim birimleri, What-If noktası, ölçüm (CSV) verisi, kalibrasyon test noktaları ve model ayarları, InfluxDB bağlantısı, sensör adları/birimleri/a·x+b düzeltmeleri/ortalamaları, ΔP kaynağı, trend ve grafik seçimleri.
 
-**Tüm venturiler için ortak olanlar:** Akışkan kütüphanesi, gösterim birimleri, InfluxDB bağlantısı, tema.
+**Tüm venturiler için ortak olan:** Akışkan kütüphanesi (bir akışkan tanımı birden çok venturide kullanılabilir).
+
+**Bu bilgisayara özel olanlar:** Tema, açık sekme/ekran, hangi venturinin açık olduğu ve InfluxDB parolası (ortak kayda yazılmaz).
 
 **Kayıt ve paylaşım:**
 - **Tek venturi dosyası** (⤓): Kullandığı akışkan tanımını da içerir. Başka bir bilgisayarda "☰ Venturiler → Venturi dosyası içe aktar" veya üst çubuktaki **JSON Yükle** ile yeni venturi olarak eklenir.
 - **JSON Yedekle:** Girilen **her değeri** içerir: tüm venturiler, akışkanlar, birimler, InfluxDB ayarları, dönüştürücü ve grafik seçimleri.
-- **Ortak kayıt (GitHub):** Tüm venturiler paylaşılır. Hangi venturinin açık olduğu her bilgisayarda yereldir. Bir bilgisayar ortak kayda ilk kez bağlandığında, o bilgisayarda düzenlenmiş venturiler ortak listeye eklenir, kaybolmaz.
+- **Ortak kayıt (GitHub):** Tüm venturiler paylaşılır ve **venturi bazında birleştirilir** (ayrıntı: [Ortak Kayıt](#ortak-kayıt-github-ile-tüm-bilgisayarlarda-aynı-veri)).
 
 Eski sürümden gelen kayıtlar otomatik olarak "Venturi 1" adlı tek bir venturiye taşınır.
 
@@ -260,10 +267,30 @@ Eski sürümden gelen kayıtlar otomatik olarak "Venturi 1" adlı tek bir ventur
 3. **Test noktalarını** girin: Coriolis referans debisi, aynı anda ΔP, sıcaklık (ve isterseniz Coriolis yoğunluğu). Üç yol vardır:
    - tabloya elle yazmak (Enter ile alt satıra geçilir),
    - CSV içe aktarmak (sütun eşleştirmeli),
-   - **Canlı** sekmesinde **＋ Kalibrasyona ekle** ile InfluxDB'den gelen ortalama değeri eklemek.
+   - **Canlı** sekmesinde **＋ Kalibrasyona ekle** ile InfluxDB'den gelen ortalama değeri eklemek,
+   - **Geçmiş veriden…** ile InfluxDB'deki bir zaman aralığından kararlı bölümleri otomatik bulmak (aşağıya bakın).
 4. **Model karşılaştırmasını** inceleyin; önerilen model otomatik seçilir. İsterseniz başka bir modeli seçin.
 5. **PLC Çıktısı** bölümünden TwinCAT 3 kodunu kopyalayın.
 6. İsterseniz **"Canlı izleme ve grafikte kalibre modeli kullan"** kutusunu işaretleyin; canlı debi hesabı ve ana grafikteki pembe kesikli eğri kalibre modele göre çalışır.
+
+### Geçmiş veriden kalibrasyon
+
+Test sırasında her noktayı tek tek eklemek yerine, testi InfluxDB'ye kaydedip sonra toplu işleyebilirsiniz:
+
+1. Kalibrasyon ekranında **Geçmiş veriden…** düğmesine basın.
+2. Başlangıç–bitiş zamanını, gruplama süresini (ör. 10 sn), kararlılık süresini (ör. 120 sn) ve izin verilen dalgalanmaları (debi ≤ %0,5, ΔP ≤ %1) girin.
+3. **Verileri Getir ve Bölümleri Bul**: uygulama, debinin ve ΔP'nin belirtilen süre boyunca kararlı kaldığı bölümleri bulur, grafikte işaretler ve her bölümün ortalamasını tabloda listeler.
+4. İstediğiniz bölümleri seçip **Seçilenleri kalibrasyona ekle** deyin.
+
+Sensör adları, a·x+b düzeltmeleri, birimler ve ΔP kaynağı (doğrudan veya P1 − P2) Canlı sekmesindeki ayarlardan alınır. Coriolis debi sensörü tanımlı olmalıdır.
+
+### Gaz kalibrasyonu
+
+Akışkan **gaz** ise (Akışkan sekmesinde tip: Gaz, κ ve tercihen M/Z girilmiş):
+- Tüm modellerde h = **ε**·√(ρ·ΔP) kullanılır; genleşme faktörü ε her test noktasının kendi P1 (mutlak) basıncıyla ISO 5167-4 Denk. 2'den hesaplanır.
+- Test tablosunda **P1 mutlak** sütunu görünür (boşsa tasarım p₁ kullanılır). Canlıdan ve geçmiş veriden eklenen noktalar P1'i otomatik alır.
+- Yoğunluk M girildiyse ideal gaz denkleminden (ρ = p₁M/ZRT), yoksa ölçülen yoğunluktan alınır.
+- Üretilen PLC kodu ek bir **fP1** (mutlak) girişi alır; ε ve ideal gaz yoğunluğunu PLC içinde hesaplar.
 
 ### İyi bir test için
 
@@ -280,15 +307,15 @@ Eski sürümden gelen kayıtlar otomatik olarak "Venturi 1" adlı tek bir ventur
 
 ### Modeller
 
-Tüm modeller yoğunluk kompanzasyonludur (h = √(ρ·ΔP)). C(Re) modelleri ayrıca viskoziteyi, yani sıcaklığın Reynolds sayısı üzerinden debi katsayısına etkisini kompanze eder.
+Tüm modeller yoğunluk kompanzasyonludur: h = ε·√(ρ·ΔP) (sıvıda ε = 1, gazda ISO 5167-4 genleşme faktörü). C(Re) modelleri ayrıca viskoziteyi, yani sıcaklığın Reynolds sayısı üzerinden debi katsayısına etkisini kompanze eder.
 
 | Model | Formül | Sıcaklık kompanzasyonu |
 |---|---|---|
-| Tek katsayı | q = K·√(ρΔP) | ρ(T) |
-| Üslü | q = K·(ρΔP)ⁿ | ρ(T) |
+| Tek katsayı | q = K·h | ρ(T) |
+| Üslü | q = K·(h²)ⁿ | ρ(T) |
 | Polinom | q = a₀ + a₁·h + a₂·h² | ρ(T) |
-| K düzeltme tablosu | q = K(ΔP)·√(ρΔP), doğrusal interpolasyon | ρ(T) |
-| **C(Re) polinom** | q = C(Re)·E·A₂·√(2ρΔP), C = c₀ + c₁L + c₂L², L = log₁₀Re | **ρ(T) + μ(T)** |
+| K düzeltme tablosu | q = K(ΔP)·h, doğrusal interpolasyon | ρ(T) |
+| **C(Re) polinom** | q = C(Re)·E·A₂·√2·h, C = c₀ + c₁L + c₂L², L = log₁₀Re | **ρ(T) + μ(T)** |
 | **C(Re) tablosu** | C, log₁₀Re'ye göre tablodan | **ρ(T) + μ(T)** |
 
 - **Model kıyası:** Her model **birini dışarıda bırak (LOO) çapraz doğrulamasıyla** test edilir. Her nokta, o nokta hariç uydurulan modelle tahmin edilir. Bu, tabloların "her noktadan geçip" yanıltıcı biçimde sıfır hata göstermesini önler.
@@ -346,9 +373,13 @@ Tasarımlar, akışkanlar, ölçüm verisi ve InfluxDB ayarları GitHub'daki bir
 - Bir bilgisayarda ortak parola **bir kez** girilir; sonrasında değişiklikler ~5 saniye içinde otomatik kaydedilir. Her kayıt bir commit'tir, geçmiş GitHub'da durur.
 - Uygulama açılışta ve dakikada bir (salt okunur bilgisayarlarda 3 dakikada bir) ortak dosyayı kontrol eder, yeni sürüm varsa yükler.
 - Parolası girilmemiş bilgisayarlar **salt okunur** çalışır (veri deposu public ise).
-- İki bilgisayar aynı anda değiştirirse uygulama sorar: *Ortak sürümü yükle* veya *Benimkini koru*.
+- **Venturi bazında birleştirme:** Ortak dosya siz çalışırken değiştiyse her venturi ve akışkan ayrı ayrı karşılaştırılır:
+  - yalnız bir tarafta değişen öğe otomatik alınır,
+  - yeni eklenen venturiler iki taraftan da korunur, silinenler silinir,
+  - **yalnızca aynı venturi iki bilgisayarda da değiştiyse** sorulur: *İkisini de tut* (varsayılan; sizinki "(bu bilgisayar)" ekiyle ayrı kayıt olur), *Benimki* veya *Ortaktaki*.
+- Bir bilgisayar ortak kayda ilk kez bağlandığında, orada düzenlenmiş venturiler ortak listeye eklenir; hiç dokunulmamış varsayılan venturi eklenmez.
 - Üst çubuktaki **☁ Ortak** düğmesi durumu gösterir: eşit / bekliyor / kaydediliyor / salt okunur / çakışma.
-- Tema, açık sekme ve InfluxDB parolası her bilgisayarda yerel kalır, ortak dosyaya yazılmaz.
+- Tema, açık sekme, açık venturi ve InfluxDB parolası her bilgisayarda yerel kalır, ortak dosyaya yazılmaz.
 
 **Kurulum (bir kez):**
 1. GitHub'da veri deposu açın: `venturiValidation-data` (public: herkes okuyabilir; private: sadece parolası olanlar okur).
@@ -488,26 +519,49 @@ timestamp,flow_m3h,dp_mbar,temp_C
 ## Dosya Yapısı
 
 ```text
-index.html          Arayüz iskeleti, CDN kütüphaneleri
-css/app.css         SCADA/HMI teması (Dark/Light), 1080p ızgara, PDF rapor stili
+index.html          Arayüz iskeleti
+css/app.css         SCADA/HMI teması (Dark/Light), yerleşim, PDF rapor stili
+lib/                Üçüncü taraf kütüphaneler (Chart.js, MathJax, html2pdf.js, marked) — internetsiz çalışma
 js/units.js         MODÜL 2 — Birim tanımları ve dönüşümler (SI çekirdek)
 js/physics.js       MODÜL 1 — ISO 5167-4 / ASME / Bernoulli, ε, kayıp, belirsizlik, düz boru
 js/fluids.js        MODÜL 3/4 — Akışkan kütüphanesi, interpolasyon, ideal gaz, boru kütüphanesi
 js/csv.js           MODÜL 3 — Akıllı CSV ayrıştırma ve sütun eşleştirme arayüzü
-js/influx.js        MODÜL 5 — InfluxDB v1 (InfluxQL) istemcisi, mixed content algılama
+js/influx.js        MODÜL 5 — InfluxDB v1 (InfluxQL) istemcisi: son değer, zaman aralığı, mixed content
 js/draw.js          MODÜL 4 — Ölçekli SVG Venturi kesiti ve basınç profili
-js/chart.js         MODÜL 4/5 — Chart.js eğrisi, sınır çizgileri, canlı kırmızı nokta
+js/chart.js         MODÜL 4/5 — Performans eğrisi, sınır çizgileri, canlı kırmızı nokta
 js/report.js        MODÜL 6 — html2pdf A4 raporu
-js/calib.js         Kalibrasyon motoru — 6 model, LOO çapraz doğrulama, ρ(T)/μ(T) uydurma, TwinCAT/IEC ST kod üretimi
+js/calib.js         Kalibrasyon motoru — 6 model (sıvı/gaz), LOO çapraz doğrulama, ρ(T)/μ(T), TwinCAT/IEC ST kodu
+js/ui.js            Pencere, bildirim, dosya indirme yardımcıları
+js/store.js         Durum yönetimi — venturi kayıtları, eski sürüm geçişi, localStorage, ortak kayıt verisi
+js/live.js          Canlı telemetri — sensörler, a·x+b, sensör başına ortalama, ΔP sıfırlama
+js/fluidui.js       Akışkan sekmesi ve sıcaklığa bağlı özellik grafiği
 js/calibui.js       Kalibrasyon & PLC ekranı (test tablosu, model kıyası, grafikler, kod çıktısı)
+js/history.js       Geçmiş veriden kalibrasyon (kararlı bölüm bulma)
 js/venturis.js      Çoklu venturi yönetimi penceresi
-js/app.js           Durum yönetimi, localStorage, arayüz bağlama, telemetri döngüsü, JSON yedek
-js/sync.js          Ortak kayıt — GitHub Contents API eşitleme, PBKDF2 + AES-GCM anahtar çözme, çakışma kontrolü
+js/trend.js         Zaman trendi
+js/help.js          Uygulama içi kullanım kılavuzu (README görüntüleyici)
+js/readme-data.js   README'nin gömülü kopyası (node tools/build-readme.js ile üretilir)
+js/app.js           Hesap döngüsü, göstergeler, çizim, formüller, PDF, başlatma
+js/sync.js          Ortak kayıt — GitHub Contents API, venturi bazında birleştirme, PBKDF2 + AES-GCM
 js/sync-config.js   Ortak kayıt deposu ve şifreli anahtar
 tools/anahtar.html  Token'ı ortak parolayla şifreleyen yardımcı sayfa
+tools/build-readme.js  README → js/readme-data.js
+tests/              Birim + uçtan uca testler (tests/run-all.sh)
 samples/            Örnek CSV dosyaları
 .nojekyll           GitHub Pages için Jekyll'i devre dışı bırakır
 ```
+
+---
+
+## Testler
+
+```bash
+tests/run-all.sh
+```
+
+- `tests/build-check.js`: sözdizimi, README gömülü kopyasının güncelliği, sürüm tutarlılığı, CDN kullanılmadığı.
+- `tests/unit-calib.js`: sıvı ve gaz kalibrasyonu; üretilen PLC kodunun uygulamayla aynı sonucu verdiği.
+- `tests/e2e.js` (Playwright/Chromium): eski kayıt geçişi, canlı demo, trend, ΔP sıfırlama, çoklu venturi, yardım, kalibrasyon (sıvı/gaz), PDF, JSON yedek, mobil görünüm, geçmiş veriden kalibrasyon (sahte InfluxDB), ortak kayıt birleştirme (sahte GitHub), dış ağ isteği olmadığı.
 
 ---
 
@@ -516,6 +570,6 @@ samples/            Örnek CSV dosyaları
 - **C değerleri:** Sabit C değerleri ISO 5167-4:2003'teki geçerlilik aralıkları içinde geçerlidir. Aralık dışı durumlar uygunluk panelinde ✗ ile işaretlenir.
 - **ASME MFC-3M:** Klasik Venturi için aynı imalat tiplerini ve katsayıları kullanır. Farklı bir sürüm veya üretici kalibrasyonu varsa **Basit Bernoulli** modunda kalibre edilmiş C_d girin.
 - **Kalıcı basınç kaybı:** Gibson korelasyonuna dayalı bir mühendislik tahminidir. Kesin değer için üretici verisi veya test kullanılmalıdır.
-- **Düz boru tablosu:** ISO 5167-4 Tablo 1 esas alınmıştır. Kritik projelerde standardın güncel baskısıyla doğrulayın.
+- **Düz boru tablosu:** ISO 5167-4 Tablo 1 esas alınmıştır ama değerler standarttan doğrulanmamıştır. Kritik projelerde standardın güncel baskısıyla doğrulayın.
 - **Gaz debisi gösterimi:** m³/h, LPM ve GPM gibi hacimsel gaz debileri **işletme koşullarında** (gerçek hacim) gösterilir, normal/standart koşullara çevrilmez.
 - **Gizlilik:** Uygulama tamamen istemci tarafında çalışır. Veriler yalnızca tarayıcınızda (`localStorage`) ve yapılandırdığınız InfluxDB sunucusuyla paylaşılır.

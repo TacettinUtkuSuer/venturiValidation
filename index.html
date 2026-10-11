@@ -13,21 +13,20 @@
       const s = JSON.parse(localStorage.getItem('venturiflow.state.v1') || '{}');
       document.documentElement.dataset.theme = s.theme === 'light' ? 'light' : 'dark';
     } catch (e) { /* localStorage kapalı olabilir */ }
-    window.tailwind = { config: { corePlugins: { preflight: false } } };
     window.MathJax = {
       tex: { inlineMath: [['\\(', '\\)']] },
       svg: { fontCache: 'local' },
       startup: { typeset: false }
     };
   </script>
-  <!-- Harici kütüphaneler (CDN) -->
-  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-  <script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>
+  <!-- Kütüphaneler depoda (lib/) — internet bağlantısı gerekmez -->
+  <script src="lib/chartjs/chart.umd.js"></script>
+  <script src="lib/html2pdf/html2pdf.bundle.min.js"></script>
+  <script src="lib/marked/marked.min.js"></script>
+  <script async id="MathJax-script" src="lib/mathjax/tex-svg.js"></script>
 
   <!-- Önbellek kırıcı: her sürümde ?v= değeri (ve altbilgideki sürüm) artırılır; tarayıcı yeni dosyaları indirir -->
-  <link rel="stylesheet" href="css/app.css?v=1.4.0">
+  <link rel="stylesheet" href="css/app.css?v=1.5.0">
 </head>
 <body>
 <div class="app">
@@ -209,8 +208,9 @@
       </div>
 
       <div class="card chart-card">
-        <div class="card-h"><span class="ico">⌁</span>Performans Eğrisi · Debi – ΔP
-          <span class="legend">
+        <div class="card-h"><span class="ico">⌁</span>
+          <div class="seg chart-tabs" id="chartTabs"><button data-ct="curve" class="on">Performans eğrisi · Debi–ΔP</button><button data-ct="trend">Zaman trendi</button></div>
+          <span class="legend" id="chartLegend">
             <span><i style="background:var(--accent)"></i>Teorik eğri</span>
             <span><i style="background:#a78bfa"></i>What-If</span>
             <span><i style="background:var(--amber)"></i>Ölçüm (CSV)</span>
@@ -223,7 +223,19 @@
             <canvas id="chart"></canvas>
             <div class="live-dot" id="liveDot"><span class="lbl" id="liveDotLbl"></span></div>
           </div>
-          <div class="whatif">
+          <div class="trend-bar" id="trendBar" hidden>
+            <label>Pencere
+              <select id="trendMin"><option value="2">Son 2 dk</option><option value="5">Son 5 dk</option><option value="10">Son 10 dk</option>
+                <option value="30">Son 30 dk</option><option value="60">Son 60 dk</option><option value="0">Tümü</option></select></label>
+            <span class="note" id="trendInfo"></span>
+            <span class="note">Canlı okumalar (ortalama) · göstergeye tıklayarak seri gizlenir/açılır</span>
+            <button class="btn sm" id="trendClear">Temizle</button>
+          </div>
+          <div class="chart-box" id="trendBox" hidden>
+            <canvas id="trendChart"></canvas>
+            <div class="trend-empty" id="trendEmpty">Henüz canlı veri yok. Canlı sekmesinden <b>▶ Başlat</b> veya <b>Demo Modu</b> ile veri toplamaya başlayın.</div>
+          </div>
+          <div class="whatif" id="whatifRow">
             <label for="slWhatIf">What-If Debi</label>
             <input type="range" id="slWhatIf" min="0" max="125" step="0.5" value="70">
             <output id="outWhatIf">—</output>
@@ -270,6 +282,7 @@
           <div class="btnrow">
             <button class="btn sm primary" id="calAdd">＋ Satır ekle</button>
             <button class="btn sm" id="calCsv">CSV içe aktar…</button>
+            <button class="btn sm" id="calHist" title="InfluxDB'deki geçmiş veriden kararlı bölümleri bulup test noktası yapar">Geçmiş veriden…</button>
             <input type="file" id="calCsvFile" accept=".csv,.txt,.tsv,text/csv" hidden>
             <button class="btn sm" id="calSample" title="Sentetik örnek veri — denemek için">Örnek veri</button>
             <button class="btn sm danger" id="calClear">Tümünü sil</button>
@@ -306,6 +319,7 @@
           <div class="plc-opts">
             <label>FB adı <input type="text" id="plcName"></label>
             <label>PLC'deki ΔP birimi <select id="plcDpUnit"></select></label>
+            <label id="plcP1Wrap" hidden>PLC'deki P1 birimi (mutlak) <select id="plcP1Unit"></select></label>
             <label>Düşük debi kesme <span class="inp"><input type="number" id="plcLowCut" step="0.5" min="0" max="49"><span class="unit-static">% debi</span></span></label>
             <button class="btn sm" id="calDownload">Dosya olarak indir</button>
           </div>
@@ -321,25 +335,33 @@
     <span id="stSave"></span>
     <span class="sep"></span>
     <span>Ayarlar tarayıcıda saklanır · ☁ Ortak kayıt ile GitHub üzerinden paylaşılır</span>
-    <span>v1.4.0</span>
+    <span>v1.5.0</span>
   </footer>
 </div>
 
 <div class="toasts" id="toasts"></div>
 
-<script src="js/units.js?v=1.4.0"></script>
-<script src="js/physics.js?v=1.4.0"></script>
-<script src="js/fluids.js?v=1.4.0"></script>
-<script src="js/csv.js?v=1.4.0"></script>
-<script src="js/influx.js?v=1.4.0"></script>
-<script src="js/draw.js?v=1.4.0"></script>
-<script src="js/chart.js?v=1.4.0"></script>
-<script src="js/report.js?v=1.4.0"></script>
-<script src="js/calib.js?v=1.4.0"></script>
-<script src="js/calibui.js?v=1.4.0"></script>
-<script src="js/sync-config.js?v=1.4.0"></script>
-<script src="js/sync.js?v=1.4.0"></script>
-<script src="js/venturis.js?v=1.4.0"></script>
-<script src="js/app.js?v=1.4.0"></script>
+<script src="js/units.js?v=1.5.0"></script>
+<script src="js/physics.js?v=1.5.0"></script>
+<script src="js/fluids.js?v=1.5.0"></script>
+<script src="js/csv.js?v=1.5.0"></script>
+<script src="js/influx.js?v=1.5.0"></script>
+<script src="js/draw.js?v=1.5.0"></script>
+<script src="js/chart.js?v=1.5.0"></script>
+<script src="js/report.js?v=1.5.0"></script>
+<script src="js/calib.js?v=1.5.0"></script>
+<script src="js/ui.js?v=1.5.0"></script>
+<script src="js/store.js?v=1.5.0"></script>
+<script src="js/live.js?v=1.5.0"></script>
+<script src="js/fluidui.js?v=1.5.0"></script>
+<script src="js/calibui.js?v=1.5.0"></script>
+<script src="js/history.js?v=1.5.0"></script>
+<script src="js/venturis.js?v=1.5.0"></script>
+<script src="js/trend.js?v=1.5.0"></script>
+<script src="js/readme-data.js?v=1.5.0"></script>
+<script src="js/help.js?v=1.5.0"></script>
+<script src="js/sync-config.js?v=1.5.0"></script>
+<script src="js/sync.js?v=1.5.0"></script>
+<script src="js/app.js?v=1.5.0"></script>
 </body>
 </html>

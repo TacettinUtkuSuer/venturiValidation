@@ -29,17 +29,18 @@
     constructor(kind, message) { super(message); this.kind = kind; }
   }
 
-  async function request(cfg, path, params) {
+  async function request(cfg, path, params, timeoutMs) {
     const url = new URL(baseUrl(cfg) + path);
     for (const k in params) url.searchParams.set(k, params[k]);
     if (cfg.user) { url.searchParams.set('u', cfg.user); url.searchParams.set('p', cfg.pass || ''); }
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const tmo = timeoutMs || 5000;
+    const timer = setTimeout(() => ctrl.abort(), tmo);
     let res;
     try {
       res = await fetch(url.toString(), { method: 'GET', signal: ctrl.signal, cache: 'no-store' });
     } catch (e) {
-      if (e.name === 'AbortError') throw new InfluxError('timeout', 'Zaman aşımı (5 sn) — sunucuya ulaşılamıyor.');
+      if (e.name === 'AbortError') throw new InfluxError('timeout', `Zaman aşımı (${Math.round(tmo / 1000)} sn) — sunucuya ulaşılamıyor.`);
       if (isMixed(cfg)) throw new InfluxError('mixed', 'Tarayıcı HTTPS sayfadan HTTP isteğini engelledi (Mixed Content).');
       throw new InfluxError('network', 'Ağ hatası / CORS engeli: ' + e.message);
     } finally {
@@ -75,5 +76,30 @@
     return out;
   }
 
-  VF.Influx = { sensorQuery, isMixed, ping, fetchLast, InfluxError };
+  /**
+   * Zaman aralığı için gruplanmış ortalamalar (geçmiş veriden kalibrasyon).
+   * sensors: [{key, field, tagKey, tagValue}] — dönüş: { key: [[t_ms, value], …] }
+   */
+  async function fetchSeries(cfg, sensors, startMs, endMs, groupSec) {
+    const g = Math.max(1, Math.round(groupSec));
+    const q = sensors.map(s => {
+      let w = `time >= ${Math.floor(startMs)}ms AND time <= ${Math.ceil(endMs)}ms`;
+      if (s.tagKey && s.tagValue) w += ` AND ${qi(s.tagKey)} = ${qs(s.tagValue)}`;
+      return `SELECT mean(${qi(s.field)}) FROM ${qi(s.measurement || cfg.measurement)} WHERE ${w} GROUP BY time(${g}s) fill(none)`;
+    }).join('; ');
+    const res = await request(cfg, '/query', { db: cfg.db, q, epoch: 'ms' }, 60000);
+    let json;
+    try { json = await res.json(); } catch (e) { throw new InfluxError('http', 'Geçersiz yanıt: HTTP ' + res.status); }
+    if (json.error) throw new InfluxError('query', json.error);
+    const out = {};
+    sensors.forEach((s, i) => {
+      const r = (json.results || [])[i] || {};
+      if (r.error) throw new InfluxError('query', r.error);
+      const vals = r.series && r.series[0] && r.series[0].values || [];
+      out[s.key] = vals.filter(v => v[1] !== null).map(v => [v[0], Number(v[1])]);
+    });
+    return out;
+  }
+
+  VF.Influx = { sensorQuery, isMixed, ping, fetchLast, fetchSeries, InfluxError };
 })(window.VF = window.VF || {});
