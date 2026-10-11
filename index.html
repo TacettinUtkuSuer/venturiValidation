@@ -40,6 +40,10 @@
         <small>Tasarım · Doğrulama · Canlı İzleme</small>
       </div>
     </div>
+    <div class="seg viewseg" id="viewSeg">
+      <button data-view="main" class="on">Tasarım &amp; İzleme</button>
+      <button data-view="calib">Kalibrasyon &amp; PLC</button>
+    </div>
     <span class="pill">Standart: <b id="pillStd">—</b></span>
     <span class="pill">Akışkan: <b id="pillFluid">—</b></span>
     <span class="pill"><span class="led" id="liveLed"></span><span id="liveText">Telemetri kapalı</span></span>
@@ -60,7 +64,7 @@
   </header>
 
   <!-- ===================== ANA ALAN ===================== -->
-  <main class="main">
+  <main class="main" id="viewMain">
 
     <!-- ---------- SOL PANEL ---------- -->
     <aside class="card left">
@@ -139,17 +143,8 @@
         <label class="row"><span>Measurement</span><input type="text" id="ixMeas" placeholder="venturi"></label>
         <div class="mixed-warn" id="mixedWarn">⚠ Sayfa HTTPS, InfluxDB HTTP: tarayıcı istekleri engelleyebilir. <a id="lnkGuide">İzin verme rehberi →</a></div>
 
-        <div class="sec">ΔP Sensörü <span class="r">zorunlu</span></div>
-        <label class="row"><span>Field</span><input type="text" id="ixDpField" placeholder="value"></label>
-        <label class="row"><span>Tag anahtarı = değeri</span>
-          <div class="inp" style="gap:4px"><input type="text" id="ixDpTagK" placeholder="sensor" style="border-radius:5px"><input type="text" id="ixDpTagV" placeholder="DPT-101" style="border-radius:5px"></div></label>
-        <label class="row"><span>Sensör birimi</span><select id="ixDpUnit"></select></label>
-
-        <div class="sec">Debi Sensörü <span class="r"><label><input type="checkbox" id="ixQOn"> doğrulama için</label></span></div>
-        <label class="row"><span>Field</span><input type="text" id="ixQField" placeholder="value"></label>
-        <label class="row"><span>Tag anahtarı = değeri</span>
-          <div class="inp" style="gap:4px"><input type="text" id="ixQTagK" placeholder="sensor" style="border-radius:5px"><input type="text" id="ixQTagV" placeholder="FT-101" style="border-radius:5px"></div></label>
-        <label class="row"><span>Sensör birimi</span><select id="ixQUnit"></select></label>
+        <div class="sec">Sensörler <span class="r">field · tag anahtarı = değeri · birim</span></div>
+        <div id="ixSensors"></div>
 
         <div class="sec">Sorgulama</div>
         <label class="row"><span>Yenileme sıklığı</span>
@@ -162,12 +157,21 @@
           <button class="btn primary sm" id="btnLive">▶ Başlat</button>
           <button class="btn sm" id="btnDemo" title="InfluxDB olmadan sentetik veri">Demo Modu</button>
         </div>
-        <div class="live-vals">
-          <div><div class="k">ΔP (canlı)</div><div class="v red" id="lvDp">—</div></div>
-          <div><div class="k">Debi (hesap)</div><div class="v" id="lvQc">—</div></div>
-          <div><div class="k">Debi (ölçülen)</div><div class="v" id="lvQm">—</div></div>
-          <div><div class="k">Sapma</div><div class="v" id="lvDev">—</div></div>
-        </div>
+        <div class="sec">Hareketli Ortalama <span class="r" id="maInfo"></span></div>
+        <label class="row"><span>Pencere</span>
+          <div class="inp" style="gap:6px">
+            <select id="maMode" style="border-radius:5px;width:auto;flex:1;border-left:1px solid var(--border-hi);background:var(--input-bg)">
+              <option value="off">Kapalı (ham değer)</option>
+              <option value="3">Son 3 veri</option><option value="5">Son 5 veri</option><option value="6">Son 6 veri</option>
+              <option value="10">Son 10 veri</option><option value="12">Son 12 veri</option><option value="20">Son 20 veri</option>
+              <option value="30">Son 30 veri</option><option value="custom">Özel…</option><option value="all">Tümü (kümülatif)</option>
+            </select>
+            <input type="number" id="maN" min="1" max="1000" step="1" style="width:76px;flex:none;border-radius:5px" title="Özel pencere boyu">
+          </div></label>
+        <label class="chkrow"><input type="checkbox" id="maNewOnly"> Yalnız yeni zaman damgalı veriyi ekle <span class="hint">(aynı değer tekrar sayılmaz)</span></label>
+        <div class="btnrow"><button class="btn sm" id="maReset">Ortalamayı sıfırla</button>
+          <button class="btn sm primary" id="btnToCal" title="Anlık ortalama ΔP, Coriolis debi, T ve ρ değerlerini kalibrasyon tablosuna ekler">＋ Kalibrasyona ekle</button></div>
+        <div class="live-vals" id="liveVals"></div>
         <div class="log" id="ixLog"></div>
       </section>
 
@@ -200,6 +204,7 @@
             <span><i style="background:#a78bfa"></i>What-If</span>
             <span><i style="background:var(--amber)"></i>Ölçüm (CSV)</span>
             <span><i style="background:#ff2d2d"></i>Canlı</span>
+            <span id="lgCal" hidden><i style="background:#f472b6"></i>Kalibre eğri</span>
           </span>
         </div>
         <div class="card-b">
@@ -240,6 +245,65 @@
     </aside>
   </main>
 
+  <!-- ===================== KALİBRASYON & PLC ===================== -->
+  <main class="calib" id="viewCalib" hidden>
+    <div class="calib-left">
+      <div class="card">
+        <div class="card-h"><span class="ico">⚙</span>Kalibrasyon Ayarları</div>
+        <div class="card-b" id="calSettings"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="ico">▦</span>Test Verisi — Referans: Coriolis <span class="tag" id="calCount"></span></div>
+        <div class="card-b">
+          <p class="note">Her satır bir test noktasıdır: Coriolis'in okuduğu <b>referans debi</b>, aynı anda okunan <b>ΔP</b> ve <b>sıcaklık</b>. Yoğunluk boşsa akışkan tablosundan ρ(T) kullanılır. Enter ile alt satıra geçilir; ✓ kutusu kaldırılan nokta hesaba katılmaz.</p>
+          <div class="btnrow">
+            <button class="btn sm primary" id="calAdd">＋ Satır ekle</button>
+            <button class="btn sm" id="calCsv">CSV içe aktar…</button>
+            <input type="file" id="calCsvFile" accept=".csv,.txt,.tsv,text/csv" hidden>
+            <button class="btn sm" id="calSample" title="Sentetik örnek veri — denemek için">Örnek veri</button>
+            <button class="btn sm danger" id="calClear">Tümünü sil</button>
+          </div>
+          <div class="cal-table-wrap"><table class="cal-table" id="calTable"></table></div>
+          <p class="note">Canlı sekmesindeki <b>＋ Kalibrasyona ekle</b> düğmesi, InfluxDB'den gelen anlık ortalama değerleri doğrudan bu tabloya ekler.</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="ico">✓</span>Veri Kalitesi</div>
+        <div class="card-b" id="calQuality"></div>
+      </div>
+    </div>
+
+    <div class="calib-right">
+      <div class="card">
+        <div class="card-h"><span class="ico">ƒ</span>Model Karşılaştırması
+          <label class="tag chkrow" style="margin:0"><input type="checkbox" id="calApply"> Canlı izleme ve grafikte kalibre modeli kullan</label></div>
+        <div class="card-b">
+          <div id="calRec"></div>
+          <div id="calModels"></div>
+        </div>
+      </div>
+      <div class="cal-charts">
+        <div class="card"><div class="card-h"><span class="ico">⌁</span>Sapma — Teorik vs Kalibre</div><div class="card-b"><div class="cal-chart"><canvas id="calChartErr"></canvas></div></div></div>
+        <div class="card"><div class="card-h"><span class="ico">⌁</span>Etkin C — Reynolds</div><div class="card-b"><div class="cal-chart"><canvas id="calChartC"></canvas></div></div></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="ico">⌨</span>PLC Çıktısı
+          <div class="seg tag" id="calCodeTabs" style="width:auto">
+            <button data-ct="tc">Beckhoff TwinCAT 3</button><button data-ct="iec">Genel IEC 61131-3 ST</button><button data-ct="txt">Katsayılar</button>
+          </div></div>
+        <div class="card-b">
+          <div class="plc-opts">
+            <label>FB adı <input type="text" id="plcName"></label>
+            <label>PLC'deki ΔP birimi <select id="plcDpUnit"></select></label>
+            <label>Düşük debi kesme <span class="inp"><input type="number" id="plcLowCut" step="0.5" min="0" max="49"><span class="unit-static">% debi</span></span></label>
+            <button class="btn sm" id="calDownload">Dosya olarak indir</button>
+          </div>
+          <div id="calCode"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
   <footer class="statusbar">
     <span id="stCalc">Hazır</span>
     <span id="stSave"></span>
@@ -259,6 +323,8 @@
 <script src="js/draw.js"></script>
 <script src="js/chart.js"></script>
 <script src="js/report.js"></script>
+<script src="js/calib.js"></script>
+<script src="js/calibui.js"></script>
 <script src="js/sync-config.js"></script>
 <script src="js/sync.js"></script>
 <script src="js/app.js"></script>
